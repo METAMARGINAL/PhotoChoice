@@ -22,14 +22,28 @@ struct HistoryEntry {
     let indexBefore: Int
 }
 
+enum ViewMode {
+    case grid
+    case single
+}
+
 @Observable
 final class PhotoSession {
+    static let gridSizeRange: ClosedRange<CGFloat> = 110...520
+
     var sourceURL: URL?
     var destinations: [Destination] = []
     var photos: [URL] = []
     var index: Int = 0
     var includeSubfolders = false
     var isViewing = false
+    var viewMode: ViewMode = .grid
+    /// Ширина ячейки сетки в точках
+    var gridThumbSize: CGFloat = 230
+
+    func setGridSize(_ value: CGFloat) {
+        gridThumbSize = min(max(value, Self.gridSizeRange.lowerBound), Self.gridSizeRange.upperBound)
+    }
     var errorMessage: String?
     var flashMessage: String?
     var movedCount = 0
@@ -90,6 +104,7 @@ final class PhotoSession {
             errorMessage = "В этой папке нет фотографий."
             return
         }
+        viewMode = .grid
         isViewing = true
         WindowChrome.enterFullScreen()
         prefetchAroundCurrent()
@@ -98,6 +113,24 @@ final class PhotoSession {
     func stopReview() {
         isViewing = false
         WindowChrome.exitFullScreen()
+    }
+
+    func toggleViewMode() {
+        viewMode = viewMode == .grid ? .single : .grid
+        prefetchAroundCurrent()
+    }
+
+    func select(_ newIndex: Int) {
+        guard photos.indices.contains(newIndex), newIndex != index else { return }
+        index = newIndex
+        prefetchAroundCurrent()
+    }
+
+    func open(_ newIndex: Int) {
+        guard photos.indices.contains(newIndex) else { return }
+        index = newIndex
+        viewMode = .single
+        prefetchAroundCurrent()
     }
 
     func goNext() {
@@ -177,6 +210,7 @@ final class PhotoSession {
         let removedIndex = index
         history.append(HistoryEntry(originalURL: original, currentURL: current, indexBefore: removedIndex))
         ImageLoader.evict(original)
+        ThumbnailLoader.evict(original)
         photos.remove(at: removedIndex)
         if photos.isEmpty {
             flash(text)

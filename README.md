@@ -6,10 +6,13 @@
 
 ## English
 
-**PhotoChoice** is a small macOS app for fast photo culling. Pick a folder, go full screen, and sort each shot with a single key or swipe: keep it, send it to one of your folders, or move it to the Trash.
+**PhotoChoice** is a small macOS app for fast photo culling. Pick a folder, browse all shots in a grid, open any of them full screen, and sort each one with a single key or swipe: keep it, send it to one of your folders, or move it to the Trash.
+
+**Current version: 1.1** — see [CHANGELOG.md](CHANGELOG.md).
 
 ### Features
 
+- **Grid of all photos** (new in 1.1): thumbnails with file name, size, resolution and camera model. Adjust thumbnail size with the slider, pinch, or `+` / `−` / `0`. Sorting keys work right in the grid.
 - Full-screen viewer with fast loading: nearby photos are decoded in advance.
 - Up to 9 destination folders, mapped to keys `1`–`9`. If you don't add any, a `Отобранные` (Selected) folder is created inside the source folder.
 - Swipe right or press `1` to move the photo to the first folder. Swipe left or press `Delete` to move it to the Trash.
@@ -21,16 +24,34 @@
 
 ### Keyboard shortcuts
 
+Everywhere:
+
+| Key | Action |
+|---|---|
+| `1`–`9` | Move to destination folder |
+| `Delete` | Move to Trash |
+| `Z` / `⌘Z` | Undo |
+| `F` | Switch between grid and single photo |
+| `⌘R` | Start review |
+
+Grid:
+
+| Key | Action |
+|---|---|
+| Arrow keys / `Space` | Select photo |
+| `Home` / `End` | First / last photo |
+| `Return` / double-click | Open photo |
+| `+` / `−` / `0` | Bigger / smaller / default thumbnails |
+| `Esc` | Exit review |
+
+Single photo:
+
 | Key | Action |
 |---|---|
 | `→` / `Space` | Next photo |
 | `←` | Previous photo |
-| `1`–`9` | Move to destination folder |
-| `Delete` | Move to Trash |
-| `Z` / `⌘Z` | Undo |
 | `+` / `−` / `0` | Zoom in / out / reset |
-| `Esc` | Reset zoom / exit viewer |
-| `⌘R` | Start review |
+| `Esc` | Reset zoom / back to grid |
 
 ### Requirements
 
@@ -49,10 +70,13 @@ The app runs in the App Sandbox. It only accesses the folders you pick.
 
 ## Русский
 
-**PhotoChoice** — небольшое приложение для macOS, чтобы быстро отбирать фотографии. Выберите папку, откройте полноэкранный просмотр и одной клавишей или свайпом решайте судьбу каждого кадра: оставить, отправить в одну из своих папок или убрать в корзину.
+**PhotoChoice** — небольшое приложение для macOS, чтобы быстро отбирать фотографии. Выберите папку, просмотрите все кадры сеткой, откройте любой на весь экран и одной клавишей или свайпом решайте его судьбу: оставить, отправить в одну из своих папок или убрать в корзину.
+
+**Текущая версия: 1.1** — см. [CHANGELOG.md](CHANGELOG.md).
 
 ### Возможности
 
+- **Сетка всех фото** (новое в 1.1): миниатюры с именем файла, размером, разрешением и моделью камеры. Размер миниатюр меняется слайдером, щипком или клавишами `+` / `−` / `0`. Клавиши отбора работают прямо в сетке.
 - Полноэкранный просмотр с быстрой загрузкой: соседние фото подгружаются заранее.
 - До 9 папок назначения, каждой соответствует клавиша `1`–`9`. Если ни одной не добавить, внутри исходной папки создаётся папка «Отобранные».
 - Свайп вправо или клавиша `1` переносит фото в первую папку. Свайп влево или `Delete` отправляет его в корзину.
@@ -64,16 +88,34 @@ The app runs in the App Sandbox. It only accesses the folders you pick.
 
 ### Горячие клавиши
 
+Везде:
+
+| Клавиша | Действие |
+|---|---|
+| `1`–`9` | Перенести в папку назначения |
+| `Delete` | В корзину |
+| `Z` / `⌘Z` | Отменить перенос |
+| `F` | Переключиться между сеткой и одним фото |
+| `⌘R` | Начать просмотр |
+
+В сетке:
+
+| Клавиша | Действие |
+|---|---|
+| Стрелки / `Пробел` | Выбрать фото |
+| `Home` / `End` | Первое / последнее фото |
+| `Return` / двойной клик | Открыть фото |
+| `+` / `−` / `0` | Крупнее / мельче / стандартный размер миниатюр |
+| `Esc` | Выйти из просмотра |
+
+В просмотре одного фото:
+
 | Клавиша | Действие |
 |---|---|
 | `→` / `Пробел` | Следующее фото |
 | `←` | Предыдущее фото |
-| `1`–`9` | Перенести в папку назначения |
-| `Delete` | В корзину |
-| `Z` / `⌘Z` | Отменить перенос |
 | `+` / `−` / `0` | Увеличить / уменьшить / сбросить масштаб |
-| `Esc` | Сбросить масштаб / выйти из просмотра |
-| `⌘R` | Начать просмотр |
+| `Esc` | Сбросить масштаб / вернуться к сетке |
 
 ### Требования
 

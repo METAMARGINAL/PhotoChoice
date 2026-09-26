@@ -18,6 +18,11 @@ struct PhotoChoiceApp: App {
                 .keyboardShortcut("r", modifiers: [.command])
                 .disabled(session.sourceURL == nil || session.isViewing)
 
+                Button(session.viewMode == .grid ? "Открыть фото (F)" : "Показать сетку (F)") {
+                    session.toggleViewMode()
+                }
+                .disabled(!session.isViewing)
+
                 Button("Выйти из просмотра") {
                     session.stopReview()
                 }

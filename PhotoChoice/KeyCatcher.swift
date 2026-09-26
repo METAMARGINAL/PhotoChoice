@@ -65,15 +65,19 @@ struct KeyCatcher: NSViewRepresentable {
 
         private func handle(_ event: NSEvent) -> NSEvent? {
             switch event.type {
+            // Без обработчика событие идёт дальше (например, скролл сетки)
             case .magnify:
-                onMagnify?(event.magnification, event.phase)
+                guard let onMagnify else { return event }
+                onMagnify(event.magnification, event.phase)
                 return nil
             case .smartMagnify:
-                onSmartMagnify?()
+                guard let onSmartMagnify else { return event }
+                onSmartMagnify()
                 return nil
             case .scrollWheel:
+                guard let onScroll else { return event }
                 let factor: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
-                onScroll?(event.scrollingDeltaX * factor, event.scrollingDeltaY * factor)
+                onScroll(event.scrollingDeltaX * factor, event.scrollingDeltaY * factor)
                 return nil
             default:
                 return event

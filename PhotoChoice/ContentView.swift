@@ -6,7 +6,11 @@ struct ContentView: View {
     var body: some View {
         Group {
             if session.isViewing {
-                ViewerView(session: session)
+                if session.viewMode == .grid && !session.photos.isEmpty {
+                    GridView(session: session)
+                } else {
+                    ViewerView(session: session)
+                }
             } else {
                 ScrollView {
                     SetupView(session: session)

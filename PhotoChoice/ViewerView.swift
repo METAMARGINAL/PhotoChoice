@@ -147,7 +147,8 @@ struct ViewerView: View {
                 hint("Z", "отмена")
                 hint("+ −", "зум")
                 hint("0", "сброс зума")
-                hint("Esc", "выход")
+                hint("F", "сетка")
+                hint("Esc", "сетка")
             }
             .padding(.bottom, 18)
         }
@@ -359,6 +360,9 @@ struct ViewerView: View {
         }
 
         switch event.keyCode {
+        case 3: // F — к сетке
+            session.toggleViewMode()
+            return true
         case 123: // left
             session.goPrevious()
             return true
@@ -372,7 +376,7 @@ struct ViewerView: View {
             if isZoomed {
                 resetZoom()
             } else {
-                session.stopReview()
+                session.viewMode = .grid
             }
             return true
         default:

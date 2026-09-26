@@ -9,3 +9,6 @@ build/
 
 # Cursor index
 .cursor/
+
+# Claude
+CLAUDE.md

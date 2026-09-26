@@ -1,24 +1,24 @@
-//
-//  ContentView.swift
-//  PhotoChoice
-//
-//  Created by Egor Yanushev on 15.09.2026.
-//
-
 import SwiftUI
 
 struct ContentView: View {
+    @Bindable var session: PhotoSession
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        Group {
+            if session.isViewing {
+                ViewerView(session: session)
+            } else {
+                ScrollView {
+                    SetupView(session: session)
+                        .frame(maxWidth: .infinity)
+                }
+                .background(Color(nsColor: .windowBackgroundColor))
+            }
         }
-        .padding()
+        .frame(minWidth: 720, minHeight: 520)
     }
 }
 
 #Preview {
-    ContentView()
+    ContentView(session: PhotoSession())
 }

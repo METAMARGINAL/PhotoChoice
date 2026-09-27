@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 
 struct Destination: Identifiable, Hashable {
     let id: UUID
@@ -38,6 +39,16 @@ final class PhotoSession {
     var includeSubfolders = false
     var isViewing = false
     var viewMode: ViewMode = .grid
+    /// Панель сведений о снимке (клавиша I)
+    var showInfo = false
+
+    // Рисование (клавиша D). Пометки только в памяти, файл не меняется
+    var isDrawing = false
+    var drawTool: DrawTool = .pen
+    var drawColor: DrawColor = .red
+    var drawSize: DrawSize = .medium
+    private(set) var annotations: [URL: [Stroke]] = [:]
+    private var annotationHistory: [URL: [[Stroke]]] = [:]
     /// Ширина ячейки сетки в точках
     var gridThumbSize: CGFloat = 230
 
@@ -111,12 +122,14 @@ final class PhotoSession {
     }
 
     func stopReview() {
+        isDrawing = false
         isViewing = false
         WindowChrome.exitFullScreen()
     }
 
     func toggleViewMode() {
         viewMode = viewMode == .grid ? .single : .grid
+        if viewMode == .grid { isDrawing = false }
         prefetchAroundCurrent()
     }
 
@@ -180,11 +193,17 @@ final class PhotoSession {
     }
 
     func undo() {
+        // В режиме рисования Z/⌘Z отменяет штрих, а не перенос файла
+        if isDrawing && viewMode == .single {
+            undoDrawing()
+            return
+        }
         guard let entry = history.popLast() else { return }
         do {
             let restore = uniqueURL(in: entry.originalURL.deletingLastPathComponent(), preferredName: entry.originalURL.lastPathComponent)
             try moveFile(from: entry.currentURL, to: restore)
             ImageLoader.evict(entry.currentURL)
+            moveAnnotations(from: entry.currentURL, to: restore)
             let insertAt = min(entry.indexBefore, photos.count)
             photos.insert(restore, at: insertAt)
             index = insertAt
@@ -206,11 +225,111 @@ final class PhotoSession {
         }
     }
 
+    // MARK: - Пометки
+
+    func strokes(for url: URL) -> [Stroke] {
+        annotations[url] ?? []
+    }
+
+    func hasAnnotations(_ url: URL) -> Bool {
+        !(annotations[url]?.isEmpty ?? true)
+    }
+
+    func addStroke(_ stroke: Stroke, to url: URL) {
+        setStrokes(strokes(for: url) + [stroke], for: url)
+    }
+
+    func removeStroke(_ id: UUID, from url: URL) {
+        setStrokes(strokes(for: url).filter { $0.id != id }, for: url)
+    }
+
+    func clearDrawing() {
+        guard let url = currentPhoto, hasAnnotations(url) else { return }
+        setStrokes([], for: url)
+        flash("Пометки очищены")
+    }
+
+    func undoDrawing() {
+        guard let url = currentPhoto, let previous = annotationHistory[url]?.popLast() else { return }
+        annotations[url] = previous
+    }
+
+    func toggleDrawing() {
+        guard isViewing, viewMode == .single else { return }
+        isDrawing.toggle()
+    }
+
+    /// Копия снимка с пометками в буфер обмена (до 4000 px, чтобы вставлялось быстро)
+    func copyAnnotated() {
+        guard let url = currentPhoto else { return }
+        let strokes = self.strokes(for: url)
+        flash("Копирую…")
+        Task {
+            let rendered = await Task.detached(priority: .userInitiated) {
+                AnnotationExporter.render(url, strokes: strokes, maxPixelSize: 4000)
+            }.value
+            guard let rendered else {
+                flash("Не удалось скопировать")
+                return
+            }
+            let image = NSImage(
+                cgImage: rendered.image,
+                size: NSSize(width: rendered.image.width, height: rendered.image.height)
+            )
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.writeObjects([image])
+            flash("Скопировано")
+        }
+    }
+
+    /// Сохраняет копию снимка с пометками в полном разрешении. Оригинал не трогаем
+    func saveAnnotated() {
+        guard let url = currentPhoto else { return }
+        let strokes = self.strokes(for: url)
+        let panel = NSSavePanel()
+        panel.title = "Сохранить копию с пометками"
+        panel.allowedContentTypes = [.jpeg, .png]
+        panel.canCreateDirectories = true
+        panel.directoryURL = url.deletingLastPathComponent()
+        panel.nameFieldStringValue = url.deletingPathExtension().lastPathComponent + "_пометки.jpg"
+        guard panel.runModal() == .OK, let target = panel.url else { return }
+        guard target.standardizedFileURL != url.standardizedFileURL else {
+            flash("Нельзя перезаписать оригинал")
+            return
+        }
+        flash("Сохраняю…")
+        Task {
+            let ok = await Task.detached(priority: .userInitiated) {
+                AnnotationExporter.write(url, strokes: strokes, to: target)
+            }.value
+            if ok {
+                flash("Сохранено")
+            } else {
+                flash("Не удалось сохранить")
+            }
+        }
+    }
+
+    private func setStrokes(_ strokes: [Stroke], for url: URL) {
+        annotationHistory[url, default: []].append(self.strokes(for: url))
+        annotations[url] = strokes
+    }
+
+    private func moveAnnotations(from old: URL, to new: URL) {
+        if let strokes = annotations.removeValue(forKey: old) {
+            annotations[new] = strokes
+        }
+        if let history = annotationHistory.removeValue(forKey: old) {
+            annotationHistory[new] = history
+        }
+    }
+
     private func finishMove(original: URL, current: URL, flash text: String) {
         let removedIndex = index
         history.append(HistoryEntry(originalURL: original, currentURL: current, indexBefore: removedIndex))
         ImageLoader.evict(original)
         ThumbnailLoader.evict(original)
+        moveAnnotations(from: original, to: current)
         photos.remove(at: removedIndex)
         if photos.isEmpty {
             flash(text)

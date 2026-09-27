@@ -13,13 +13,20 @@ struct ViewerView: View {
     @State private var panAtDragStart: CGSize?
     @State private var containerSize: CGSize = .zero
 
+    // Двухпальцевый свайп по трекпаду. Класс, чтобы накопление не перерисовывало вид
+    @State private var trackpadSwipe = TrackpadSwipe()
+
     // «Улетающее» фото после решения
     @State private var ghost: Ghost?
 
     private let imagePadding: CGFloat = 20
+    private let infoPanelInsets = EdgeInsets(top: 52, leading: 0, bottom: 56, trailing: 16)
     private let maxZoom: CGFloat = 10
-    private let minGestureZoom: CGFloat = 0.5
+    private let minZoom: CGFloat = 0.1
+    /// Увеличено больше «вписанного» — перетаскивание двигает фото, а не свайпает
     private var isZoomed: Bool { zoom > 1.01 }
+    /// Масштаб отличается от «вписанного» в любую сторону
+    private var isScaled: Bool { abs(zoom - 1) > 0.01 }
 
     private struct Ghost: Identifiable {
         let id = UUID()
@@ -37,6 +44,16 @@ struct ViewerView: View {
             } else {
                 photoLayer
                 hud
+                if session.showInfo, let url = session.currentPhoto {
+                    HStack {
+                        Spacer()
+                        InfoPanel(url: url)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.08)))
+                            .padding(infoPanelInsets)
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
 
             if let flash = session.flashMessage {
@@ -46,9 +63,10 @@ struct ViewerView: View {
         .background(
             KeyCatcher(
                 onKeyDown: { handleEvent($0) },
-                onMagnify: { delta, phase in handleMagnify(delta, phase) },
-                onSmartMagnify: { toggleZoom() },
-                onScroll: { dx, dy in handleScroll(dx, dy) }
+                onMagnify: { delta, phase, anchor in handleMagnify(delta, phase, anchor) },
+                onSmartMagnify: { anchor in toggleZoom(at: anchor) },
+                onScroll: { handleScroll($0) },
+                onCopy: { session.copyAnnotated() }
             )
         )
         .onChange(of: session.currentPhoto, initial: true) { _, url in
@@ -57,6 +75,7 @@ struct ViewerView: View {
                 currentImage = cached
             }
         }
+        .onDisappear { session.isDrawing = false }
         .task(id: session.currentPhoto) {
             await loadCurrentImage()
         }
@@ -71,6 +90,11 @@ struct ViewerView: View {
                     Image(nsImage: currentImage)
                         .resizable()
                         .scaledToFit()
+                        .overlay {
+                            if let url = session.currentPhoto {
+                                AnnotationLayer(session: session, url: url, zoom: zoom)
+                            }
+                        }
                         .padding(imagePadding)
                         .scaleEffect(zoom)
                         .offset(
@@ -111,8 +135,14 @@ struct ViewerView: View {
                 pan = clampedPan(pan)
             }
         }
-        .gesture(dragGesture)
-        .onTapGesture(count: 2) { toggleZoom() }
+        .gesture(dragGesture, including: session.isDrawing ? .subviews : .all)
+        .onTapGesture(count: 2) { location in
+            guard !session.isDrawing else { return }
+            toggleZoom(at: CGPoint(
+                x: location.x - containerSize.width / 2,
+                y: location.y - containerSize.height / 2
+            ))
+        }
     }
 
     private var hud: some View {
@@ -125,12 +155,22 @@ struct ViewerView: View {
                 Text(session.currentPhoto?.lastPathComponent ?? "")
                     .foregroundStyle(.white.opacity(0.8))
                 Spacer()
-                if isZoomed {
+                if isScaled {
                     Text("\(Int((zoom * 100).rounded()))%")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.6))
                         .padding(.trailing, 8)
                 }
+                Button {
+                    session.toggleDrawing()
+                } label: {
+                    Image(systemName: session.isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(session.isDrawing ? Color.accentColor : Color.white.opacity(0.8))
+                .help("Рисовать (D)")
+                .padding(.trailing, 10)
                 Text(session.progressText)
                     .foregroundStyle(.white)
                     .font(.headline.monospacedDigit())
@@ -140,6 +180,18 @@ struct ViewerView: View {
 
             Spacer()
 
+            if session.isDrawing {
+                DrawToolbar(session: session)
+                    .padding(.bottom, 18)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                hints
+            }
+        }
+    }
+
+    private var hints: some View {
+        VStack {
             HStack(spacing: 16) {
                 hint("← →", "листать")
                 hint("1–\(min(max(session.destinations.count, 1), 9))", "в папку")
@@ -147,11 +199,13 @@ struct ViewerView: View {
                 hint("Z", "отмена")
                 hint("+ −", "зум")
                 hint("0", "сброс зума")
+                hint("I", "инфо")
+                hint("D", "рисовать")
                 hint("F", "сетка")
                 hint("Esc", "сетка")
             }
-            .padding(.bottom, 18)
         }
+        .padding(.bottom, 18)
     }
 
     private var finishedState: some View {
@@ -228,40 +282,80 @@ struct ViewerView: View {
         }
     }
 
-    // MARK: - Zoom
+    // MARK: - Zoom (как в «Просмотре»: можно отдалить меньше экрана, зум к курсору)
 
-    private func handleMagnify(_ delta: CGFloat, _ phase: NSEvent.Phase) {
+    /// Меняет масштаб, удерживая на месте точку `anchor` (смещение от центра экрана)
+    private func setZoom(_ newValue: CGFloat, anchor: CGPoint = .zero) {
+        guard zoom > 0 else { return }
+        let target = min(max(newValue, minZoom), maxZoom)
+        let ratio = target / zoom
+        let newPan = CGSize(
+            width: anchor.x - (anchor.x - pan.width) * ratio,
+            height: anchor.y - (anchor.y - pan.height) * ratio
+        )
+        zoom = target
+        pan = clampedPan(newPan)
+    }
+
+    private func handleMagnify(_ delta: CGFloat, _ phase: NSEvent.Phase, _ anchor: CGPoint) {
         guard currentImage != nil else { return }
-        zoom = min(max(zoom * (1 + delta), minGestureZoom), maxZoom)
-        pan = clampedPan(pan)
+        setZoom(zoom * (1 + delta), anchor: anchor)
         if phase == .ended || phase == .cancelled {
             settleZoom()
         }
     }
 
-    /// Если отдалили меньше, чем «вписано», плавно возвращаем к 100% вписанного размера
+    /// Рядом с «вписанным» размером слегка примагничиваем к нему
     private func settleZoom() {
-        if zoom < 1.05 {
-            withAnimation(.spring(duration: 0.25)) {
+        if abs(zoom - 1) < 0.04 {
+            withAnimation(.spring(duration: 0.2)) {
                 zoom = 1
                 pan = .zero
             }
         }
     }
 
-    private func handleScroll(_ dx: CGFloat, _ dy: CGFloat) {
-        guard isZoomed else { return }
-        pan = clampedPan(CGSize(width: pan.width + dx, height: pan.height + dy))
+    /// Курсор над панелью сведений — её прокрутку не перехватываем
+    private func isOverInfoPanel(_ anchor: CGPoint) -> Bool {
+        guard session.showInfo, containerSize.width > 0 else { return false }
+        let x = anchor.x + containerSize.width / 2
+        let y = anchor.y + containerSize.height / 2
+        return x >= containerSize.width - infoPanelInsets.trailing - InfoPanel.width
+            && y >= infoPanelInsets.top
+            && y <= containerSize.height - infoPanelInsets.bottom
     }
 
-    private func toggleZoom() {
+    private func handleScroll(_ scroll: ScrollInfo) -> Bool {
+        if isOverInfoPanel(scroll.anchor) { return false }
+        // ⌘ или ⌥ + колесо/скролл — зум к курсору (удобно с мышью)
+        if scroll.modifiers.contains(.command) || scroll.modifiers.contains(.option) {
+            guard currentImage != nil else { return true }
+            setZoom(zoom * pow(1.01, scroll.dy), anchor: scroll.anchor)
+            return true
+        }
+        // Увеличено — два пальца двигают фото
+        if isZoomed {
+            pan = clampedPan(CGSize(width: pan.width + scroll.dx, height: pan.height + scroll.dy))
+            return true
+        }
+        // Иначе горизонтальный свайп двумя пальцами листает, как стрелки
+        guard scroll.isPrecise else { return true }
+        switch trackpadSwipe.feed(scroll) {
+        case .next: session.goNext()
+        case .previous: session.goPrevious()
+        case nil: break
+        }
+        return true
+    }
+
+    private func toggleZoom(at anchor: CGPoint = .zero) {
         guard currentImage != nil else { return }
         withAnimation(.spring(duration: 0.3)) {
-            if zoom > 1.05 {
+            if isScaled {
                 zoom = 1
                 pan = .zero
             } else {
-                zoom = 2.5
+                setZoom(2.5, anchor: anchor)
             }
         }
     }
@@ -269,12 +363,10 @@ struct ViewerView: View {
     private func stepZoom(by factor: CGFloat) {
         guard currentImage != nil else { return }
         withAnimation(.spring(duration: 0.2)) {
-            zoom = min(max(zoom * factor, 1), maxZoom)
-            if zoom <= 1.05 {
+            setZoom(zoom * factor)
+            if abs(zoom - 1) < 0.04 {
                 zoom = 1
                 pan = .zero
-            } else {
-                pan = clampedPan(pan)
             }
         }
     }
@@ -338,6 +430,23 @@ struct ViewerView: View {
 
     private func handleEvent(_ event: NSEvent) -> Bool {
         // Коды клавиш не зависят от раскладки (работает и на русской)
+        let command = event.modifierFlags.contains(.command)
+        if !command && event.keyCode == 2 { // D — рисование
+            withAnimation(.easeOut(duration: 0.2)) { session.toggleDrawing() }
+            return true
+        }
+        if session.isDrawing && !command {
+            let tools: [UInt16: DrawTool] = [35: .pen, 46: .marker, 0: .arrow, 15: .rectangle, 31: .ellipse, 14: .eraser]
+            if let tool = tools[event.keyCode] {
+                session.drawTool = tool
+                return true
+            }
+            if event.keyCode == 53 { // Esc — выйти из рисования
+                withAnimation(.easeOut(duration: 0.2)) { session.isDrawing = false }
+                return true
+            }
+        }
+
         switch event.keyCode {
         case 6: // Z (и ⌘Z)
             session.undo()
@@ -363,6 +472,9 @@ struct ViewerView: View {
         case 3: // F — к сетке
             session.toggleViewMode()
             return true
+        case 34: // I — сведения
+            withAnimation(.easeOut(duration: 0.2)) { session.showInfo.toggle() }
+            return true
         case 123: // left
             session.goPrevious()
             return true
@@ -373,7 +485,7 @@ struct ViewerView: View {
             commit(flyTo: CGSize(width: -900, height: 0)) { session.trashCurrent() }
             return true
         case 53: // escape
-            if isZoomed {
+            if isScaled {
                 resetZoom()
             } else {
                 session.viewMode = .grid
@@ -450,5 +562,44 @@ private struct FlyAway: View {
             .onAppear {
                 withAnimation(.easeIn(duration: 0.28)) { launched = true }
             }
+    }
+}
+
+/// Распознаёт горизонтальный свайп двумя пальцами: одно листание на жест, инерция игнорируется
+private final class TrackpadSwipe {
+    enum Direction { case next, previous }
+
+    private var accumX: CGFloat = 0
+    private var accumY: CGFloat = 0
+    private var fired = false
+    private let threshold: CGFloat = 50
+
+    func feed(_ scroll: ScrollInfo) -> Direction? {
+        // Инерция после отпускания пальцев — не листаем
+        if !scroll.momentumPhase.isEmpty { return nil }
+        if scroll.phase.contains(.began) || scroll.phase.contains(.mayBegin) {
+            reset()
+        }
+        if scroll.phase.contains(.ended) || scroll.phase.contains(.cancelled) {
+            reset()
+            return nil
+        }
+        guard !fired else { return nil }
+
+        // Приводим к направлению движения пальцев независимо от настройки прокрутки
+        let fingerX = scroll.isNatural ? scroll.dx : -scroll.dx
+        accumX += fingerX
+        accumY += abs(scroll.dy)
+
+        guard abs(accumX) > threshold, abs(accumX) > accumY * 1.5 else { return nil }
+        fired = true
+        // Пальцы влево — следующее фото, вправо — предыдущее (как листать страницы)
+        return accumX < 0 ? .next : .previous
+    }
+
+    private func reset() {
+        accumX = 0
+        accumY = 0
+        fired = false
     }
 }

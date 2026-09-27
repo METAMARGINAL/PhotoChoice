@@ -1,11 +1,30 @@
 import AppKit
 import SwiftUI
 
+/// Событие прокрутки: трекпад (два пальца) или колесо мыши
+struct ScrollInfo {
+    var dx: CGFloat
+    var dy: CGFloat
+    var modifiers: NSEvent.ModifierFlags
+    /// Положение курсора относительно центра вида, ось Y вниз
+    var anchor: CGPoint
+    var phase: NSEvent.Phase
+    var momentumPhase: NSEvent.Phase
+    /// true — трекпад/Magic Mouse, false — обычное колесо
+    var isPrecise: Bool
+    /// Включена «естественная» прокрутка
+    var isNatural: Bool
+}
+
 struct KeyCatcher: NSViewRepresentable {
     var onKeyDown: (NSEvent) -> Bool
-    var onMagnify: ((CGFloat, NSEvent.Phase) -> Void)?
-    var onSmartMagnify: (() -> Void)?
-    var onScroll: ((CGFloat, CGFloat) -> Void)?
+    /// Точка (CGPoint) — положение курсора относительно центра вида, ось Y вниз
+    var onMagnify: ((CGFloat, NSEvent.Phase, CGPoint) -> Void)?
+    var onSmartMagnify: ((CGPoint) -> Void)?
+    /// Возвращает true, если прокрутка обработана; false — событие уходит дальше (например, в панель сведений)
+    var onScroll: ((ScrollInfo) -> Bool)?
+    /// ⌘C (Правка → Копировать), когда фокус у этого вида
+    var onCopy: (() -> Void)?
 
     func makeNSView(context: Context) -> CatcherView {
         let view = CatcherView()
@@ -27,17 +46,36 @@ struct KeyCatcher: NSViewRepresentable {
         view.onMagnify = onMagnify
         view.onSmartMagnify = onSmartMagnify
         view.onScroll = onScroll
+        view.onCopy = onCopy
     }
 
-    final class CatcherView: NSView {
+    final class CatcherView: NSView, NSMenuItemValidation {
         var onKeyDown: ((NSEvent) -> Bool)?
-        var onMagnify: ((CGFloat, NSEvent.Phase) -> Void)?
-        var onSmartMagnify: (() -> Void)?
-        var onScroll: ((CGFloat, CGFloat) -> Void)?
+        var onMagnify: ((CGFloat, NSEvent.Phase, CGPoint) -> Void)?
+        var onSmartMagnify: ((CGPoint) -> Void)?
+        var onScroll: ((ScrollInfo) -> Bool)?
+        var onCopy: (() -> Void)?
+
+        @objc func copy(_ sender: Any?) {
+            onCopy?()
+        }
+
+        func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+            if menuItem.action == #selector(copy(_:)) {
+                return onCopy != nil
+            }
+            return true
+        }
 
         private var monitor: Any?
 
         override var acceptsFirstResponder: Bool { true }
+        override var isFlipped: Bool { true }
+
+        private func centerOffset(_ event: NSEvent) -> CGPoint {
+            let point = convert(event.locationInWindow, from: nil)
+            return CGPoint(x: point.x - bounds.midX, y: point.y - bounds.midY)
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -68,17 +106,26 @@ struct KeyCatcher: NSViewRepresentable {
             // Без обработчика событие идёт дальше (например, скролл сетки)
             case .magnify:
                 guard let onMagnify else { return event }
-                onMagnify(event.magnification, event.phase)
+                onMagnify(event.magnification, event.phase, centerOffset(event))
                 return nil
             case .smartMagnify:
                 guard let onSmartMagnify else { return event }
-                onSmartMagnify()
+                onSmartMagnify(centerOffset(event))
                 return nil
             case .scrollWheel:
                 guard let onScroll else { return event }
                 let factor: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
-                onScroll(event.scrollingDeltaX * factor, event.scrollingDeltaY * factor)
-                return nil
+                let handled = onScroll(ScrollInfo(
+                    dx: event.scrollingDeltaX * factor,
+                    dy: event.scrollingDeltaY * factor,
+                    modifiers: event.modifierFlags,
+                    anchor: centerOffset(event),
+                    phase: event.phase,
+                    momentumPhase: event.momentumPhase,
+                    isPrecise: event.hasPreciseScrollingDeltas,
+                    isNatural: event.isDirectionInvertedFromDevice
+                ))
+                return handled ? nil : event
             default:
                 return event
             }

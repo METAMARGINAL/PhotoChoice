@@ -23,6 +23,32 @@ struct PhotoChoiceApp: App {
                 }
                 .disabled(!session.isViewing)
 
+                Button(session.showInfo ? "Скрыть сведения (I)" : "Сведения о снимке (I)") {
+                    session.showInfo.toggle()
+                }
+                .disabled(!session.isViewing)
+
+                Divider()
+
+                Button(session.isDrawing ? "Закончить рисование (D)" : "Рисовать (D)") {
+                    session.toggleDrawing()
+                }
+                .disabled(!session.isViewing || session.viewMode != .single)
+
+                Button("Сохранить копию с пометками…") {
+                    session.saveAnnotated()
+                }
+                .keyboardShortcut("s", modifiers: [.command])
+                .disabled(!session.isViewing || session.viewMode != .single)
+
+                Button("Копировать с пометками") {
+                    session.copyAnnotated()
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(!session.isViewing || session.viewMode != .single)
+
+                Divider()
+
                 Button("Выйти из просмотра") {
                     session.stopReview()
                 }

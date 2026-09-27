@@ -24,7 +24,16 @@ struct GridView: View {
             Rectangle()
                 .fill(Color.black.opacity(0.6))
                 .frame(height: 1)
-            grid
+            HStack(spacing: 0) {
+                grid
+                if session.showInfo, let url = session.currentPhoto {
+                    Rectangle()
+                        .fill(Color.black.opacity(0.6))
+                        .frame(width: 1)
+                    InfoPanel(url: url)
+                        .transition(.move(edge: .trailing))
+                }
+            }
         }
         .background(Color(white: 0.16))
         .overlay {
@@ -41,7 +50,7 @@ struct GridView: View {
         .background(
             KeyCatcher(
                 onKeyDown: { handleEvent($0) },
-                onMagnify: { delta, _ in
+                onMagnify: { delta, _, _ in
                     session.setGridSize(session.gridThumbSize * (1 + delta))
                 }
             )
@@ -67,7 +76,7 @@ struct GridView: View {
 
             Spacer(minLength: 20)
 
-            Text("F / ↩ — открыть · 1–9 в папку · ⌫ корзина · Z отмена")
+            Text("F / ↩ — открыть · I инфо · 1–9 в папку · ⌫ корзина · Z отмена")
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.5))
                 .lineLimit(1)
@@ -124,7 +133,8 @@ struct GridView: View {
                             GridCell(
                                 url: item.element,
                                 isSelected: item.offset == session.index,
-                                compact: session.gridThumbSize < 160
+                                compact: session.gridThumbSize < 160,
+                                hasNotes: session.hasAnnotations(item.element)
                             )
                             .id(item.element)
                             .onTapGesture(count: 2) {
@@ -197,6 +207,8 @@ struct GridView: View {
         switch event.keyCode {
         case 3, 36, 76: // F, Return, Enter — открыть фото
             session.open(session.index)
+        case 34: // I — сведения
+            withAnimation(.easeOut(duration: 0.2)) { session.showInfo.toggle() }
         case 123: // ←
             session.select(session.index - 1)
         case 124, 49: // →, пробел
@@ -229,6 +241,7 @@ private struct GridCell: View {
     let url: URL
     let isSelected: Bool
     let compact: Bool
+    let hasNotes: Bool
 
     @State private var thumbnail: Thumbnail?
 
@@ -257,6 +270,15 @@ private struct GridCell: View {
                 }
             }
             .aspectRatio(1, contentMode: .fit)
+            .overlay(alignment: .topTrailing) {
+                if hasNotes {
+                    Image(systemName: "pencil.tip.crop.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white, Color(red: 1, green: 0.23, blue: 0.19))
+                        .padding(6)
+                        .help("Есть пометки")
+                }
+            }
 
             caption(thumb?.info)
         }

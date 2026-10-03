@@ -84,106 +84,228 @@ struct AnnotationLayer: View {
     }
 }
 
-/// Панель инструментов рисования
+/// Панель инструментов рисования: инструменты, цвета, толщины, действия
 struct DrawToolbar: View {
     @Bindable var session: PhotoSession
 
+    @Environment(\.theme) private var theme
+
     var body: some View {
-        HStack(spacing: 14) {
-            HStack(spacing: 4) {
-                ForEach(DrawTool.allCases, id: \.self) { tool in
-                    iconButton(tool.symbol, help: tool.title, selected: session.drawTool == tool) {
-                        session.drawTool = tool
-                    }
+        let c = theme.c
+        switch theme.direction {
+        case .studio:
+            content
+                .padding(4)
+                .frame(maxWidth: .infinity)
+                .background(c.surface1)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(c.line).frame(height: 1)
                 }
-            }
-
-            separator
-
-            HStack(spacing: 8) {
-                ForEach(DrawColor.allCases, id: \.self) { color in
-                    Button {
-                        session.drawColor = color
-                        if session.drawTool == .eraser { session.drawTool = .pen }
-                    } label: {
-                        Circle()
-                            .fill(color.color)
-                            .frame(width: 18, height: 18)
-                            .overlay(Circle().stroke(.white.opacity(0.35), lineWidth: 1))
-                            .padding(3)
-                            .overlay(
-                                Circle().stroke(.white, lineWidth: session.drawColor == color ? 2 : 0)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            separator
-
-            HStack(spacing: 4) {
-                ForEach(DrawSize.allCases, id: \.self) { size in
-                    Button {
-                        session.drawSize = size
-                    } label: {
-                        Circle()
-                            .fill(.white)
-                            .frame(width: size.points + 3, height: size.points + 3)
-                            .frame(width: 28, height: 28)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(.white.opacity(session.drawSize == size ? 0.2 : 0))
-                            )
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Толщина")
-                }
-            }
-
-            separator
-
-            HStack(spacing: 4) {
-                iconButton("arrow.uturn.backward", help: "Отменить штрих (Z)") { session.undoDrawing() }
-                iconButton("trash", help: "Стереть все пометки") { session.clearDrawing() }
-                iconButton("doc.on.doc", help: "Копировать с пометками (⌘C)") { session.copyAnnotated() }
-                iconButton("square.and.arrow.down", help: "Сохранить копию с пометками (⌘S)") { session.saveAnnotated() }
-            }
-
-            Button("Готово") { session.isDrawing = false }
-                .buttonStyle(.plain)
-                .font(.callout.weight(.semibold))
-                .padding(.horizontal, 12)
+        case .glass:
+            content
+                .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(Color.accentColor, in: Capsule())
-                .foregroundStyle(.white)
-                .help("Выйти из рисования (D или Esc)")
+                .glassEffect(.regular, in: .capsule)
+                .padding(.bottom, 16)
+        case .quiet:
+            content
+                .padding(.bottom, 8)
+        case .contact:
+            content
+                .padding(6)
+                .background(c.overlay, in: RoundedRectangle(cornerRadius: 4))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(c.line, lineWidth: 1))
+                .shadow(color: .black.opacity(0.6), radius: 9, y: 6)
+                .padding(.bottom, 14)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(.black.opacity(0.7), in: Capsule())
-        .overlay(Capsule().stroke(.white.opacity(0.12)))
-        .foregroundStyle(.white)
+    }
+
+    private var content: some View {
+        HStack(spacing: 6) {
+            ForEach(DrawTool.allCases, id: \.self) { tool in
+                toolButton(tool)
+            }
+
+            separator
+
+            ForEach(DrawColor.allCases, id: \.self) { color in
+                colorDot(color)
+            }
+
+            separator
+
+            ForEach(DrawSize.allCases, id: \.self) { size in
+                widthButton(size)
+            }
+
+            separator
+
+            actionButton("arrow.uturn.backward", "Отменить штрих") { session.undoDrawing() }
+            actionButton("trash", "Стереть всё", danger: true) { session.clearDrawing() }
+            actionButton("doc.on.doc", "Копировать", key: "⌘C") { session.copyAnnotated() }
+            actionButton("square.and.arrow.down", "Сохранить копию", key: "⌘S") { session.saveAnnotated() }
+            actionButton("xmark", "Выйти", key: "D", muted: true) {
+                withAnimation(.easeOut(duration: 0.2)) { session.isDrawing = false }
+            }
+        }
+        .fixedSize()
+    }
+
+    private var itemShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: theme.isGlass ? 17 : theme.rMd)
     }
 
     private var separator: some View {
         Rectangle()
-            .fill(.white.opacity(0.2))
+            .fill(theme.c.line)
             .frame(width: 1, height: 22)
+            .padding(.horizontal, 4)
     }
 
-    private func iconButton(_ symbol: String, help: String, selected: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
+    private func shortcut(_ tool: DrawTool) -> String {
+        switch tool {
+        case .pen: "P"
+        case .marker: "M"
+        case .arrow: "A"
+        case .rectangle: "R"
+        case .ellipse: "O"
+        case .eraser: "E"
+        }
+    }
+
+    private func toolButton(_ tool: DrawTool) -> some View {
+        let c = theme.c
+        let isOn = session.drawTool == tool
+        return Button {
+            session.drawTool = tool
+        } label: {
+            Image(systemName: tool.symbol)
                 .font(.system(size: 14, weight: .medium))
-                .frame(width: 30, height: 28)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(.white.opacity(selected ? 0.22 : 0))
-                )
+                .foregroundStyle(isOn ? (theme.isQuiet ? c.text1 : c.accent) : c.text2)
+                .frame(width: 34, height: 34)
+                .background(isOn && !theme.isQuiet ? c.selectionFill : Color.clear, in: itemShape)
+                .overlay {
+                    if isOn && !theme.isQuiet {
+                        itemShape.strokeBorder(c.accent, lineWidth: 1.5)
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if !theme.isQuiet {
+                        Text(shortcut(tool))
+                            .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(isOn ? c.accent : c.text3)
+                            .padding(.trailing, 3)
+                            .padding(.bottom, 2)
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    if isOn && theme.isQuiet {
+                        Rectangle().fill(c.text1).frame(height: 1.5).padding(.horizontal, 10)
+                    }
+                }
+                .contentShape(itemShape)
+        }
+        .buttonStyle(.plain)
+        .help(tool.title)
+    }
+
+    private func colorDot(_ color: DrawColor) -> some View {
+        let c = theme.c
+        let isOn = session.drawColor == color
+        return Button {
+            session.drawColor = color
+            if session.drawTool == .eraser { session.drawTool = .pen }
+        } label: {
+            Circle()
+                .fill(color.color)
+                .frame(width: 20, height: 20)
+                .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                .overlay {
+                    if isOn {
+                        Circle()
+                            .stroke(c.text1, lineWidth: 2)
+                            .padding(-4)
+                    }
+                }
+                .padding(.horizontal, 3)
+                .frame(height: 34)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(help)
+    }
+
+    private func widthButton(_ size: DrawSize) -> some View {
+        let c = theme.c
+        let isOn = session.drawSize == size
+        let barHeight: CGFloat = switch size {
+        case .small: 2
+        case .medium: 4
+        case .large: 7
+        }
+        return Button {
+            session.drawSize = size
+        } label: {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(isOn ? (theme.isQuiet ? c.text1 : c.accent) : c.text2)
+                .frame(width: 16, height: barHeight)
+                .frame(width: 26, height: 34)
+                .background(isOn && !theme.isQuiet ? c.selectionFill : Color.clear, in: itemShape)
+                .contentShape(itemShape)
+        }
+        .buttonStyle(.plain)
+        .help("Толщина")
+    }
+
+    private func actionButton(
+        _ symbol: String,
+        _ title: String,
+        key: String? = nil,
+        danger: Bool = false,
+        muted: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        let c = theme.c
+        return Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .foregroundStyle(danger ? c.danger : (muted || theme.isQuiet ? c.text2 : c.text1))
+                Text(title)
+                    .foregroundStyle(muted || theme.isQuiet ? c.text2 : c.text1)
+                if let key {
+                    KeyCap(key, size: .small)
+                }
+            }
+            .font(.system(size: 12))
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+            .contentShape(itemShape)
+        }
+        .buttonStyle(DrawActionStyle(shape: itemShape))
+    }
+}
+
+/// Наведение на действие в панели рисования
+private struct DrawActionStyle: ButtonStyle {
+    let shape: RoundedRectangle
+
+    func makeBody(configuration: Configuration) -> some View {
+        DrawActionBody(configuration: configuration, shape: shape)
+    }
+}
+
+private struct DrawActionBody: View {
+    let configuration: ButtonStyleConfiguration
+    let shape: RoundedRectangle
+
+    @Environment(\.theme) private var theme
+    @State private var hovered = false
+
+    var body: some View {
+        configuration.label
+            .background(
+                configuration.isPressed ? theme.c.surface2 : (hovered ? theme.c.surface3 : Color.clear),
+                in: shape
+            )
+            .onHover { hovered = $0 }
     }
 }

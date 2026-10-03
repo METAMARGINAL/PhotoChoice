@@ -25,6 +25,8 @@ struct KeyCatcher: NSViewRepresentable {
     var onScroll: ((ScrollInfo) -> Bool)?
     /// ⌘C (Правка → Копировать), когда фокус у этого вида
     var onCopy: (() -> Void)?
+    /// ⌘A (Правка → Выбрать все)
+    var onSelectAll: (() -> Void)?
 
     func makeNSView(context: Context) -> CatcherView {
         let view = CatcherView()
@@ -47,6 +49,7 @@ struct KeyCatcher: NSViewRepresentable {
         view.onSmartMagnify = onSmartMagnify
         view.onScroll = onScroll
         view.onCopy = onCopy
+        view.onSelectAll = onSelectAll
     }
 
     final class CatcherView: NSView, NSMenuItemValidation {
@@ -55,14 +58,22 @@ struct KeyCatcher: NSViewRepresentable {
         var onSmartMagnify: ((CGPoint) -> Void)?
         var onScroll: ((ScrollInfo) -> Bool)?
         var onCopy: (() -> Void)?
+        var onSelectAll: (() -> Void)?
 
         @objc func copy(_ sender: Any?) {
             onCopy?()
         }
 
+        override func selectAll(_ sender: Any?) {
+            onSelectAll?()
+        }
+
         func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
             if menuItem.action == #selector(copy(_:)) {
                 return onCopy != nil
+            }
+            if menuItem.action == #selector(selectAll(_:)) {
+                return onSelectAll != nil
             }
             return true
         }

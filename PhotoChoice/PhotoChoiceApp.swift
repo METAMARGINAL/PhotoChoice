@@ -30,6 +30,11 @@ struct PhotoChoiceApp: App {
 
                 Divider()
 
+                Button(session.viewMode == .compare ? "Закончить сравнение (C)" : "Сравнить кадры (C)") {
+                    session.toggleCompare()
+                }
+                .disabled(!session.isViewing || session.photos.count < 2)
+
                 Button(session.isDrawing ? "Закончить рисование (D)" : "Рисовать (D)") {
                     session.toggleDrawing()
                 }
@@ -74,6 +79,10 @@ struct PhotoChoiceApp: App {
                 .keyboardShortcut("z", modifiers: [.command])
                 .disabled(!session.isViewing)
             }
+        }
+
+        Settings {
+            SettingsRoot()
         }
     }
 }

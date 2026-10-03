@@ -1,5 +1,33 @@
 # Changelog / История изменений
 
+## 1.3 — 2026-10-03
+
+### English
+
+**New**
+- Compare mode (`C`): two shots side by side, reference (A) and candidate (B). Synced zoom and pan (`L`), swap sides (`X`), promote to reference (`↑`), sort the active side with `1`–`9` / `Delete`, info panel for the active shot.
+- Color palette: the info panel shows about 10 main colors of the photo (k-means in OKLab). Palettes are cached and survive move + undo.
+- Themes: Studio, Glass, Quiet and Contact, with light versions of Studio and Glass. Light mode applies to the start window and the grid; the viewer, drawing and compare stay dark.
+- New design system: shared keycaps, hint bar grouped by meaning, buttons with hover, pressed and disabled states, checkbox and action confirmations, all following the current theme.
+- RAW + JPEG pairs: files with the same name are shown as one card and are moved, trashed and restored together (can be turned off in Settings).
+- Rename by metadata on move (off by default): three templates based on capture date and time, falling back to the file date. RAW + JPEG pairs get the same name; Trash keeps the original name; undo restores it.
+- Settings window (`⌘,`) with theme previews, appearance mode, pairing and renaming options.
+- Redesigned start window.
+- Spec for the upcoming "Reject" and "Bursts" sections: `docs/SmartCulling.md`.
+
+### Русский
+
+**Новое**
+- Сравнение (`C`): два кадра рядом, эталон (A) и кандидат (B). Синхронные масштаб и перемещение (`L`), обмен сторон (`X`), «сделать эталоном» (`↑`), отбор активной стороны клавишами `1`–`9` / `Delete`, панель сведений для активного кадра.
+- Палитра кадра: в панели сведений показываются около 10 основных цветов снимка (k-means в OKLab). Палитры кэшируются и находятся снова после переноса и отмены.
+- Темы оформления: «Студия», «Стекло», «Тишина» и «Контакт», у «Студии» и «Стекла» есть светлые варианты. Светлый режим действует на стартовое окно и сетку; просмотр, рисование и сравнение всегда тёмные.
+- Новая дизайн-система: общие клавиши-подсказки, строка подсказок со смысловыми группами, кнопки с состояниями наведения, нажатия и выключения, чекбокс и подтверждения действий — всё по текущей теме.
+- Пары RAW + JPEG: файлы с одинаковым именем показываются одной карточкой и переносятся, удаляются и возвращаются вместе (можно выключить в настройках).
+- Переименование по метаданным при переносе (по умолчанию выключено): три шаблона на основе даты и времени съёмки, если их нет — даты файла. Пара RAW + JPEG получает общее имя, в корзину файлы уходят со старым именем, Z возвращает прежнее.
+- Окно «Настройки» (`⌘,`): превью тем, режим оформления, пары и переименование.
+- Новое оформление стартового окна.
+- Спецификация будущих разделов «Брак» и «Серии»: `docs/SmartCulling.md`.
+
 ## 1.2 — 2026-09-27
 
 ### English

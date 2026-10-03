@@ -47,7 +47,7 @@ nonisolated enum DrawColor: String, CaseIterable, Sendable {
         switch self {
         case .red: (1.0, 0.23, 0.19)
         case .yellow: (1.0, 0.84, 0.04)
-        case .green: (0.2, 0.84, 0.29)
+        case .green: (0.204, 0.78, 0.349)
         case .blue: (0.04, 0.52, 1.0)
         case .white: (1, 1, 1)
         case .black: (0.05, 0.05, 0.05)

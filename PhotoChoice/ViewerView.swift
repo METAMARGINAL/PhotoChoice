@@ -4,6 +4,8 @@ import SwiftUI
 struct ViewerView: View {
     @Bindable var session: PhotoSession
 
+    @Environment(\.theme) private var theme
+
     @State private var currentImage: NSImage?
 
     @State private var dragOffset: CGSize = .zero
@@ -11,6 +13,7 @@ struct ViewerView: View {
     @State private var zoom: CGFloat = 1
     @State private var pan: CGSize = .zero
     @State private var panAtDragStart: CGSize?
+    /// Размер области под фото (без панели сведений)
     @State private var containerSize: CGSize = .zero
 
     // Двухпальцевый свайп по трекпаду. Класс, чтобы накопление не перерисовывало вид
@@ -19,14 +22,27 @@ struct ViewerView: View {
     // «Улетающее» фото после решения
     @State private var ghost: Ghost?
 
-    private let imagePadding: CGFloat = 20
-    private let infoPanelInsets = EdgeInsets(top: 52, leading: 0, bottom: 56, trailing: 16)
+    // Автоскрытие интерфейса поверх фото («Стекло», «Тишина»)
+    @State private var hudVisible = true
+    @State private var hideTask: Task<Void, Never>?
+
     private let maxZoom: CGFloat = 10
     private let minZoom: CGFloat = 0.1
     /// Увеличено больше «вписанного» — перетаскивание двигает фото, а не свайпает
     private var isZoomed: Bool { zoom > 1.01 }
     /// Масштаб отличается от «вписанного» в любую сторону
     private var isScaled: Bool { abs(zoom - 1) > 0.01 }
+
+    /// Поля вокруг фото по теме
+    private var insets: EdgeInsets {
+        let s = theme.stageInsets
+        return EdgeInsets(top: s.v, leading: s.h, bottom: s.v, trailing: s.h)
+    }
+
+    /// Ширина, которую забирает панель сведений справа; фото сдвигается, а не лежит под ней
+    private var panelReserve: CGFloat {
+        session.showInfo && !session.photos.isEmpty ? theme.panelReserve : 0
+    }
 
     private struct Ghost: Identifiable {
         let id = UUID()
@@ -36,52 +52,83 @@ struct ViewerView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        let c = theme.c
+        ZStack(alignment: .trailing) {
+            c.canvas.ignoresSafeArea()
 
             if session.photos.isEmpty {
                 finishedState
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                photoLayer
-                hud
-                if session.showInfo, let url = session.currentPhoto {
-                    HStack {
-                        Spacer()
-                        InfoPanel(url: url)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.08)))
-                            .padding(infoPanelInsets)
-                    }
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                ZStack {
+                    photoLayer
+                    hud
+                        .opacity(showsHUD ? 1 : 0)
+                        .allowsHitTesting(showsHUD)
+                    ToastOverlay(toast: session.toast)
                 }
-            }
+                .padding(.trailing, panelReserve)
 
-            if let flash = session.flashMessage {
-                flashBadge(flash)
+                if session.showInfo, let url = session.currentPhoto {
+                    InfoPanel(url: url, companions: session.companions(of: url))
+                        .padding(theme.isGlass ? 12 : 0)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
         }
         .background(
             KeyCatcher(
                 onKeyDown: { handleEvent($0) },
-                onMagnify: { delta, phase, anchor in handleMagnify(delta, phase, anchor) },
-                onSmartMagnify: { anchor in toggleZoom(at: anchor) },
+                onMagnify: { delta, phase, anchor in handleMagnify(delta, phase, photoAnchor(anchor)) },
+                onSmartMagnify: { anchor in toggleZoom(at: photoAnchor(anchor)) },
                 onScroll: { handleScroll($0) },
                 onCopy: { session.copyAnnotated() }
             )
         )
+        .onContinuousHover { phase in
+            if case .active = phase { pokeHUD() }
+        }
+        .onAppear { pokeHUD() }
         .onChange(of: session.currentPhoto, initial: true) { _, url in
             resetTransform()
             if let url, let cached = ImageLoader.cachedImage(at: url) {
                 currentImage = cached
             }
         }
-        .onDisappear { session.isDrawing = false }
+        .onChange(of: session.isDrawing) { _, _ in pokeHUD() }
+        .onDisappear {
+            session.isDrawing = false
+            hideTask?.cancel()
+        }
         .task(id: session.currentPhoto) {
             await loadCurrentImage()
         }
     }
 
-    // MARK: - Layers
+    private var showsHUD: Bool {
+        hudVisible || !theme.autoHidesHUD || session.isDrawing
+    }
+
+    /// Возвращает интерфейс и заново заводит таймер скрытия (2 с простоя)
+    private func pokeHUD() {
+        if !hudVisible {
+            withAnimation(.easeOut(duration: 0.15)) { hudVisible = true }
+        }
+        hideTask?.cancel()
+        guard theme.autoHidesHUD else { return }
+        hideTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, !session.isDrawing else { return }
+            withAnimation(.easeOut(duration: 0.3)) { hudVisible = false }
+        }
+    }
+
+    /// Точка от KeyCatcher (смещение от центра всего экрана) → смещение от центра области фото
+    private func photoAnchor(_ anchor: CGPoint) -> CGPoint {
+        CGPoint(x: anchor.x + panelReserve / 2, y: anchor.y)
+    }
+
+    // MARK: - Фото
 
     private var photoLayer: some View {
         GeometryReader { geo in
@@ -95,7 +142,7 @@ struct ViewerView: View {
                                 AnnotationLayer(session: session, url: url, zoom: zoom)
                             }
                         }
-                        .padding(imagePadding)
+                        .padding(insets)
                         .scaleEffect(zoom)
                         .offset(
                             x: pan.width + dragOffset.width,
@@ -105,11 +152,11 @@ struct ViewerView: View {
                 } else {
                     ProgressView()
                         .controlSize(.large)
-                        .tint(.white)
+                        .tint(theme.c.text1)
                 }
 
                 if let ghost {
-                    FlyAway(image: ghost.image, start: ghost.start, target: ghost.target, padding: imagePadding)
+                    FlyAway(image: ghost.image, start: ghost.start, target: ghost.target, insets: insets)
                         .id(ghost.id)
                         .allowsHitTesting(false)
                 }
@@ -118,14 +165,16 @@ struct ViewerView: View {
             .clipped()
             .overlay(alignment: .topLeading) {
                 if dragOffset.width < -80 {
-                    label("Корзина", color: .red)
-                        .padding(40)
+                    swipeLabel("Корзина", color: theme.c.danger)
+                        .padding(.top, insets.top)
+                        .padding(.leading, 40)
                 }
             }
             .overlay(alignment: .topTrailing) {
                 if dragOffset.width > 80 {
-                    label(session.primaryDestination?.name ?? "Папка", color: .green)
-                        .padding(40)
+                    swipeLabel(session.primaryDestination?.name ?? "Папка", color: theme.c.success)
+                        .padding(.top, insets.top)
+                        .padding(.trailing, 40)
                 }
             }
             .contentShape(Rectangle())
@@ -145,82 +194,193 @@ struct ViewerView: View {
         }
     }
 
+    // MARK: - Интерфейс поверх фото
+
     private var hud: some View {
-        VStack {
-            HStack {
-                Button("Выйти") { session.stopReview() }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white.opacity(0.8))
-                Spacer()
-                Text(session.currentPhoto?.lastPathComponent ?? "")
-                    .foregroundStyle(.white.opacity(0.8))
-                Spacer()
-                if isScaled {
-                    Text("\(Int((zoom * 100).rounded()))%")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.6))
-                        .padding(.trailing, 8)
-                }
-                Button {
-                    session.toggleDrawing()
-                } label: {
-                    Image(systemName: session.isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(session.isDrawing ? Color.accentColor : Color.white.opacity(0.8))
-                .help("Рисовать (D)")
-                .padding(.trailing, 10)
-                Text(session.progressText)
-                    .foregroundStyle(.white)
-                    .font(.headline.monospacedDigit())
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
-
-            Spacer()
-
+        VStack(spacing: 0) {
+            topbar
+            Spacer(minLength: 0)
             if session.isDrawing {
                 DrawToolbar(session: session)
-                    .padding(.bottom, 18)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
-                hints
+                HintBar(groups: [
+                    HintGroup(title: "Листать", hints: [
+                        Hint("←", "→", label: "кадр")
+                    ]),
+                    HintGroup(title: "Отбор", hints: [
+                        Hint("1–9", label: "в папку"),
+                        Hint("⌫", label: "корзина"),
+                        Hint("Z", label: "отмена")
+                    ]),
+                    HintGroup(title: "Вид", hints: [
+                        Hint("I", label: "инфо"),
+                        Hint("D", label: "рисовать"),
+                        Hint("C", label: "сравнить"),
+                        Hint("F", label: "сетка")
+                    ])
+                ])
             }
         }
     }
 
-    private var hints: some View {
-        VStack {
-            HStack(spacing: 16) {
-                hint("← →", "листать")
-                hint("1–\(min(max(session.destinations.count, 1), 9))", "в папку")
-                hint("⌫", "корзина")
-                hint("Z", "отмена")
-                hint("+ −", "зум")
-                hint("0", "сброс зума")
-                hint("I", "инфо")
-                hint("D", "рисовать")
-                hint("F", "сетка")
-                hint("Esc", "сетка")
+    private var topbar: some View {
+        let c = theme.c
+        return HStack(spacing: 12) {
+            capsuleGroup {
+                Button {
+                    session.viewMode = .grid
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Сетка")
+                    }
+                }
+                .buttonStyle(PCButtonStyle(kind: .ghost))
+                .help("К сетке (F или Esc)")
+            }
+
+            capsuleGroup(text: true) {
+                HStack(spacing: 12) {
+                    counter
+                    Text(session.currentPhoto?.lastPathComponent ?? "")
+                        .font(.system(size: theme.isQuiet ? 12 : 13, weight: theme.isQuiet ? .regular : .medium))
+                        .foregroundStyle(theme.isQuiet ? c.text2 : c.text1)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let url = session.currentPhoto, !session.companions(of: url).isEmpty {
+                        Text("+ " + session.companions(of: url).map { $0.pathExtension.uppercased() }.joined(separator: " + "))
+                            .font(theme.numFont)
+                            .foregroundStyle(c.text3)
+                    }
+                }
+            }
+
+            Spacer(minLength: 12)
+
+            if isScaled {
+                zoomBadge
+            }
+
+            capsuleGroup {
+                HStack(spacing: 4) {
+                    Button {
+                        session.startCompare()
+                    } label: {
+                        Image(systemName: "arrow.left.arrow.right")
+                    }
+                    .buttonStyle(PCIconButtonStyle())
+                    .help("Сравнить с соседним кадром (C)")
+
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { session.toggleDrawing() }
+                    } label: {
+                        Image(systemName: "pencil.tip.crop.circle")
+                    }
+                    .buttonStyle(PCIconButtonStyle(isOn: session.isDrawing))
+                    .help("Рисовать (D)")
+
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { session.showInfo.toggle() }
+                    } label: {
+                        Image(systemName: "sidebar.right")
+                    }
+                    .buttonStyle(PCIconButtonStyle(isOn: session.showInfo))
+                    .help("Сведения о снимке (I)")
+                }
             }
         }
-        .padding(.bottom, 18)
+        .padding(.horizontal, theme.isGlass ? 16 : 12)
+        .padding(.top, theme.isGlass ? 12 : 0)
+        .frame(height: theme.topbarHeight + (theme.isGlass ? 8 : 0))
+        .background {
+            if theme.isStudio || theme.isContact {
+                c.overlay
+                    .background(.ultraThinMaterial)
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(c.line).frame(height: 1)
+                    }
+            }
+        }
+        .overlay {
+            if session.isDrawing {
+                // Ярлык режима по центру панели
+                HStack(spacing: 5) {
+                    Image(systemName: "pencil.tip")
+                    Text("Режим рисования")
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(c.accent)
+                .padding(.horizontal, 10)
+                .frame(height: 24)
+                .overlay(RoundedRectangle(cornerRadius: theme.isGlass ? 12 : theme.rMd).stroke(c.accent, lineWidth: 1))
+                .padding(.top, theme.isGlass ? 12 : 0)
+            }
+        }
+    }
+
+    /// «12 / 480»
+    private var counter: some View {
+        let c = theme.c
+        let total = session.photos.count
+        let current = total == 0 ? 0 : session.index + 1
+        return HStack(spacing: 0) {
+            Text("\(current)")
+                .fontWeight(.semibold)
+                .foregroundStyle(theme.isContact ? c.edge : c.text1)
+            Text(" / \(total)")
+                .foregroundStyle(theme.isContact ? c.edge : c.text2)
+        }
+        .font(theme.numFont)
+        .tracking(theme.isContact ? 0.9 : 0)
+    }
+
+    /// Процент масштаба
+    private var zoomBadge: some View {
+        let c = theme.c
+        return Text("\(Int((zoom * 100).rounded()))%")
+            .font(theme.numFont)
+            .foregroundStyle(theme.isContact ? c.edge : (theme.isQuiet ? c.text2 : c.text1))
+            .padding(.horizontal, theme.isQuiet ? 0 : 8)
+            .padding(.vertical, 2)
+            .background {
+                if theme.isStudio {
+                    RoundedRectangle(cornerRadius: theme.rSm).fill(c.surface2)
+                } else if theme.isContact {
+                    RoundedRectangle(cornerRadius: theme.rSm).stroke(c.lineStrong, lineWidth: 1)
+                }
+            }
+    }
+
+    /// У «Стекла» группы — стеклянные капсулы; у остальных — просто содержимое
+    @ViewBuilder
+    private func capsuleGroup<Content: View>(text: Bool = false, @ViewBuilder content: () -> Content) -> some View {
+        if theme.isGlass {
+            content()
+                .padding(.horizontal, text ? 16 : 6)
+                .frame(height: 40)
+                .glassEffect(.regular, in: .capsule)
+        } else {
+            content()
+        }
     }
 
     private var finishedState: some View {
-        VStack(spacing: 16) {
+        let c = theme.c
+        return VStack(spacing: 16) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 64))
-                .foregroundStyle(.green)
+                .font(.system(size: 56))
+                .foregroundStyle(c.success)
             Text("Готово")
-                .font(.largeTitle.bold())
-                .foregroundStyle(.white)
+                .font(theme.titleFont)
+                .foregroundStyle(c.text1)
             Text("Отобрано: \(session.movedCount)   В корзине: \(session.trashedCount)")
-                .foregroundStyle(.white.opacity(0.8))
+                .font(theme.bodyFont)
+                .foregroundStyle(c.text2)
             Button("К выбору папки") {
                 session.stopReview()
             }
+            .buttonStyle(PCButtonStyle(kind: .primary, big: true))
             .keyboardShortcut(.defaultAction)
         }
     }
@@ -284,7 +444,7 @@ struct ViewerView: View {
 
     // MARK: - Zoom (как в «Просмотре»: можно отдалить меньше экрана, зум к курсору)
 
-    /// Меняет масштаб, удерживая на месте точку `anchor` (смещение от центра экрана)
+    /// Меняет масштаб, удерживая на месте точку `anchor` (смещение от центра области фото)
     private func setZoom(_ newValue: CGFloat, anchor: CGPoint = .zero) {
         guard zoom > 0 else { return }
         let target = min(max(newValue, minZoom), maxZoom)
@@ -317,20 +477,19 @@ struct ViewerView: View {
 
     /// Курсор над панелью сведений — её прокрутку не перехватываем
     private func isOverInfoPanel(_ anchor: CGPoint) -> Bool {
-        guard session.showInfo, containerSize.width > 0 else { return false }
-        let x = anchor.x + containerSize.width / 2
-        let y = anchor.y + containerSize.height / 2
-        return x >= containerSize.width - infoPanelInsets.trailing - InfoPanel.width
-            && y >= infoPanelInsets.top
-            && y <= containerSize.height - infoPanelInsets.bottom
+        guard panelReserve > 0, containerSize.width > 0 else { return false }
+        let fullWidth = containerSize.width + panelReserve
+        let x = anchor.x + fullWidth / 2
+        return x >= containerSize.width
     }
 
     private func handleScroll(_ scroll: ScrollInfo) -> Bool {
         if isOverInfoPanel(scroll.anchor) { return false }
+        pokeHUD()
         // ⌘ или ⌥ + колесо/скролл — зум к курсору (удобно с мышью)
         if scroll.modifiers.contains(.command) || scroll.modifiers.contains(.option) {
             guard currentImage != nil else { return true }
-            setZoom(zoom * pow(1.01, scroll.dy), anchor: scroll.anchor)
+            setZoom(zoom * pow(1.01, scroll.dy), anchor: photoAnchor(scroll.anchor))
             return true
         }
         // Увеличено — два пальца двигают фото
@@ -384,14 +543,17 @@ struct ViewerView: View {
               image.size.width > 0, image.size.height > 0,
               containerSize.width > 0, containerSize.height > 0 else { return .zero }
 
-        let availW = max(containerSize.width - imagePadding * 2, 1)
-        let availH = max(containerSize.height - imagePadding * 2, 1)
+        let h = insets.leading
+        let v = insets.top
+        let availW = max(containerSize.width - h * 2, 1)
+        let availH = max(containerSize.height - v * 2, 1)
         let fit = min(availW / image.size.width, availH / image.size.height)
         let shownW = image.size.width * fit * zoom
         let shownH = image.size.height * fit * zoom
 
-        let maxX = max(0, (shownW - containerSize.width) / 2 + imagePadding)
-        let maxY = max(0, (shownH - containerSize.height) / 2 + imagePadding)
+        // Увеличенное фото можно довести до края экрана, но не дальше
+        let maxX = max(0, (shownW - containerSize.width) / 2 + min(h, 20))
+        let maxY = max(0, (shownH - containerSize.height) / 2 + min(v, 20))
         return CGSize(
             width: min(max(value.width, -maxX), maxX),
             height: min(max(value.height, -maxY), maxY)
@@ -409,7 +571,7 @@ struct ViewerView: View {
         }
     }
 
-    // MARK: - Image loading
+    // MARK: - Загрузка
 
     private func loadCurrentImage() async {
         guard let url = session.currentPhoto else {
@@ -426,11 +588,19 @@ struct ViewerView: View {
         currentImage = image
     }
 
-    // MARK: - Keyboard
+    // MARK: - Клавиатура
 
     private func handleEvent(_ event: NSEvent) -> Bool {
         // Коды клавиш не зависят от раскладки (работает и на русской)
         let command = event.modifierFlags.contains(.command)
+
+        // Действия отбора и листание не будят интерфейс — он не мешает смотреть на кадр
+        let silentKeys: Set<UInt16> = [51, 117, 123, 124, 49]
+        let isDigit = event.charactersIgnoringModifiers?.first?.isWholeNumber ?? false
+        if !silentKeys.contains(event.keyCode) && !(isDigit && !command) {
+            pokeHUD()
+        }
+
         if !command && event.keyCode == 2 { // D — рисование
             withAnimation(.easeOut(duration: 0.2)) { session.toggleDrawing() }
             return true
@@ -464,7 +634,7 @@ struct ViewerView: View {
             break
         }
 
-        if event.modifierFlags.contains(.command) {
+        if command {
             return false
         }
 
@@ -472,8 +642,17 @@ struct ViewerView: View {
         case 3: // F — к сетке
             session.toggleViewMode()
             return true
+        case 8: // C — сравнение
+            session.startCompare()
+            return true
         case 34: // I — сведения
             withAnimation(.easeOut(duration: 0.2)) { session.showInfo.toggle() }
+            return true
+        case 4: // H — спрятать/показать интерфейс
+            if theme.autoHidesHUD {
+                hideTask?.cancel()
+                withAnimation(.easeOut(duration: 0.2)) { hudVisible.toggle() }
+            }
             return true
         case 123: // left
             session.goPrevious()
@@ -502,43 +681,20 @@ struct ViewerView: View {
         }
     }
 
-    // MARK: - Small views
+    // MARK: - Мелочи
 
-    private func hint(_ keys: String, _ title: String) -> some View {
-        HStack(spacing: 6) {
-            Text(keys)
-                .font(.caption.bold().monospaced())
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.white.opacity(0.12), in: Capsule())
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.7))
-        }
-        .foregroundStyle(.white)
-    }
-
-    private func label(_ text: String, color: Color) -> some View {
+    /// Штамп при свайпе мышью: «Корзина» или имя папки
+    private func swipeLabel(_ text: String, color: Color) -> some View {
         Text(text.uppercased())
-            .font(.title.bold())
+            .font(.system(size: 26, weight: .bold))
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: theme.rLg)
                     .stroke(color, lineWidth: 4)
             )
             .foregroundStyle(color)
             .rotationEffect(.degrees(-12))
-    }
-
-    private func flashBadge(_ text: String) -> some View {
-        Text(text)
-            .font(.title2.bold())
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(.black.opacity(0.55), in: Capsule())
-            .foregroundStyle(.white)
-            .transition(.opacity)
     }
 }
 
@@ -546,7 +702,7 @@ private struct FlyAway: View {
     let image: NSImage
     let start: CGSize
     let target: CGSize
-    let padding: CGFloat
+    let insets: EdgeInsets
 
     @State private var launched = false
 
@@ -555,7 +711,7 @@ private struct FlyAway: View {
         Image(nsImage: image)
             .resizable()
             .scaledToFit()
-            .padding(padding)
+            .padding(insets)
             .offset(current)
             .rotationEffect(.degrees(Double(current.width / 40)))
             .opacity(launched ? 0 : 1)
@@ -566,7 +722,7 @@ private struct FlyAway: View {
 }
 
 /// Распознаёт горизонтальный свайп двумя пальцами: одно листание на жест, инерция игнорируется
-private final class TrackpadSwipe {
+final class TrackpadSwipe {
     enum Direction { case next, previous }
 
     private var accumX: CGFloat = 0

@@ -494,6 +494,80 @@ struct ToastOverlay: View {
     }
 }
 
+// MARK: - Сегменты
+
+struct PCSegmentItem: Identifiable {
+    let id: Int
+    let title: String
+    /// Число справа от названия (например, сколько кадров в разделе)
+    var detail: String?
+    /// Вместо числа — маленький индикатор (идёт анализ)
+    var busy = false
+    var help: String?
+}
+
+/// Сегментный переключатель в стиле темы: «Все фото 812 · Брак 37 · Серии 12»
+struct PCSegmented: View {
+    @Environment(\.theme) private var theme
+
+    let items: [PCSegmentItem]
+    let selected: Int
+    let onSelect: (Int) -> Void
+
+    var body: some View {
+        let c = theme.c
+        let outer = RoundedRectangle(cornerRadius: theme.isGlass ? 14 : theme.rMd + 1)
+        let inner = RoundedRectangle(cornerRadius: theme.isGlass ? 12 : theme.rMd)
+        HStack(spacing: 2) {
+            ForEach(items) { item in
+                let isOn = item.id == selected
+                Button {
+                    onSelect(item.id)
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(item.title)
+                            .font(.system(size: 12, weight: isOn ? .semibold : .medium))
+                            .foregroundStyle(isOn ? c.text1 : c.text2)
+                        if item.busy {
+                            ProgressView()
+                                .controlSize(.mini)
+                        } else if let detail = item.detail {
+                            Text(detail)
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(isOn ? c.accent : c.text3)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .background(isOn ? c.selectionFill : Color.clear, in: inner)
+                    .overlay {
+                        if isOn && !theme.isQuiet {
+                            inner.strokeBorder(c.selection.opacity(0.6), lineWidth: 1)
+                        }
+                    }
+                    .overlay(alignment: .bottom) {
+                        if isOn && theme.isQuiet {
+                            Rectangle().fill(c.text1).frame(height: 1.5).padding(.horizontal, 8)
+                        }
+                    }
+                    .contentShape(inner)
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help(item.help ?? item.title)
+            }
+        }
+        .padding(2)
+        .background {
+            if !theme.isQuiet && !theme.isGlass {
+                outer.fill(c.surface2)
+                outer.stroke(c.line, lineWidth: 1)
+            }
+        }
+        .fixedSize()
+    }
+}
+
 // MARK: - Панели
 
 extension View {

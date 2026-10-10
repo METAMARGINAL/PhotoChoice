@@ -28,12 +28,13 @@ enum ThumbnailLoader {
 
     nonisolated(unsafe) private static let cache: NSCache<NSURL, Thumbnail> = {
         let cache = NSCache<NSURL, Thumbnail>()
-        cache.totalCostLimit = 600 * 1024 * 1024
+        // Миниатюра 900 px — ~2 МБ; 250 МБ хватает на несколько экранов сетки
+        cache.totalCostLimit = 250 * 1024 * 1024
         return cache
     }()
 
     /// Ограничиваем число одновременных декодов, иначе RAW‑файлы кладут диск и CPU
-    nonisolated(unsafe) private static let queue: OperationQueue = {
+    private nonisolated static let queue: OperationQueue = {
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 4
         queue.qualityOfService = .userInitiated
@@ -46,6 +47,10 @@ enum ThumbnailLoader {
 
     nonisolated static func evict(_ url: URL) {
         cache.removeObject(forKey: url as NSURL)
+    }
+
+    nonisolated static func removeAll() {
+        cache.removeAllObjects()
     }
 
     static func load(_ url: URL) async -> Thumbnail? {
@@ -120,3 +125,4 @@ enum ThumbnailLoader {
         return thumbnail
     }
 }
+

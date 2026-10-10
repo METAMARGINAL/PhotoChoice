@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import SwiftUI
 
 /// Сетка всех фото. Вход/выход в полноэкранный просмотр — F, двойной клик или Return
@@ -9,6 +10,7 @@ struct GridView: View {
     @State private var gridWidth: CGFloat = 0
     /// Выделенные кадры (⌘A, ⌘‑клик, ⇧‑клик) — для копирования; текущий кадр — session.index
     @State private var selection: Set<URL> = []
+    @AppStorage("marksEnabled") private var marksEnabled = false
 
     private let defaultSize: CGFloat = 230
 
@@ -28,6 +30,11 @@ struct GridView: View {
             topbar
             HStack(spacing: 0) {
                 grid
+                if session.showCalibration && session.sectionsAvailable {
+                    CalibrationPanel(session: session)
+                        .padding(theme.isGlass ? 12 : 0)
+                        .transition(.move(edge: .trailing))
+                }
                 if session.showInfo, let url = session.currentPhoto {
                     InfoPanel(url: url, companions: session.companions(of: url))
                         .padding(theme.isGlass ? 12 : 0)
@@ -45,7 +52,8 @@ struct GridView: View {
                     Hint("1–9", label: "в папку"),
                     Hint("⌫", label: "корзина"),
                     Hint("Z", label: "отмена")
-                ]),
+                ])
+            ] + (marksEnabled ? [MarkHints.group] : []) + [
                 HintGroup(title: "Вид", hints: [
                     Hint("I", label: "инфо"),
                     Hint("C", label: "сравнить"),
@@ -55,6 +63,13 @@ struct GridView: View {
         }
         .background(theme.isContact ? c.canvas : c.app)
         .overlay { ToastOverlay(toast: session.toast) }
+        .onChange(of: session.section) { _, _ in
+            selection = []
+        }
+        .onChange(of: marksEnabled) { _, _ in
+            // Функцию выключили — фильтр не должен прятать кадры без кнопки, которой его снять
+            session.markFilter = MarkFilter()
+        }
         .background(
             KeyCatcher(
                 onKeyDown: { handleEvent($0) },
@@ -105,6 +120,18 @@ struct GridView: View {
                 }
             }
 
+            if session.sectionsAvailable {
+                capsuleGroup {
+                    sectionSwitcher
+                }
+            }
+
+            if marksEnabled {
+                capsuleGroup {
+                    markFilterMenu
+                }
+            }
+
             Spacer(minLength: 12)
 
             capsuleGroup {
@@ -120,6 +147,16 @@ struct GridView: View {
                     }
                     .buttonStyle(PCButtonStyle(kind: .ghost))
                     .help("Сравнить выбранный кадр с соседним")
+
+                    if session.sectionsAvailable {
+                        Button {
+                            withAnimation(.easeOut(duration: 0.2)) { session.showCalibration.toggle() }
+                        } label: {
+                            Image(systemName: "slider.horizontal.3")
+                        }
+                        .buttonStyle(PCIconButtonStyle(isOn: session.showCalibration))
+                        .help("Калибровка брака (⌥⌘K)")
+                    }
 
                     Button {
                         withAnimation(.easeOut(duration: 0.2)) { session.showInfo.toggle() }
@@ -213,41 +250,237 @@ struct GridView: View {
 
     // MARK: - Сетка
 
+    // MARK: - Звёзды и цвета
+
+    /// Фильтр по звёздам и цвету и запись в XMP
+    private var markFilterMenu: some View {
+        let filter = session.markFilter
+        return Menu {
+            Section("Звёзд не меньше") {
+                ForEach(0...5, id: \.self) { n in
+                    Toggle(n == 0 ? "Любые" : String(repeating: "★", count: n), isOn: Binding(
+                        get: { filter.minRating == n },
+                        set: { _ in session.markFilter.minRating = n }
+                    ))
+                }
+            }
+            Section("Цвет") {
+                Toggle("Без цвета", isOn: colorBinding(0))
+                ForEach(ColorClass.allCases) { color in
+                    Toggle(isOn: colorBinding(color.rawValue)) {
+                        Label { Text(color.title) } icon: { Image(nsImage: color.menuDot) }
+                    }
+                }
+            }
+            Divider()
+            Button("Сбросить фильтр") {
+                session.markFilter = MarkFilter()
+            }
+            .disabled(!filter.isActive)
+            Divider()
+            Button("Записать звёзды и цвета в XMP") {
+                session.exportMarks()
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: filter.isActive
+                      ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                Text(filter.summary)
+            }
+            .foregroundStyle(filter.isActive ? theme.c.accent : theme.c.text2)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(session.section == .series
+              ? "Фильтр по звёздам и цвету — в «Все фото», «Браке» и «Людях»; серии показываются целиком"
+              : "Фильтр по звёздам и цвету")
+    }
+
+    private func colorBinding(_ color: Int) -> Binding<Bool> {
+        Binding(
+            get: { session.markFilter.colors.contains(color) },
+            set: { on in
+                if on {
+                    session.markFilter.colors.insert(color)
+                } else {
+                    session.markFilter.colors.remove(color)
+                }
+            }
+        )
+    }
+
+    // MARK: - Разделы
+
+    /// «Все фото 812 · Брак 37 · Серии 12»
+    private var sectionSwitcher: some View {
+        PCSegmented(
+            items: [
+                PCSegmentItem(id: 0, title: PhotoSection.all.title, detail: "\(session.allPhotos.count)", help: "Все фото (⌘1)"),
+                PCSegmentItem(
+                    id: 1,
+                    title: PhotoSection.defects.title,
+                    detail: "\(session.defectPhotos.count)",
+                    // Пока брака не найдено и анализ идёт — крутилка; найденное показываем сразу
+                    busy: analysis.isRunning && session.defectPhotos.isEmpty,
+                    help: analysisHelp("Кадры с техническим браком (⌘2)")
+                ),
+                PCSegmentItem(
+                    id: 2,
+                    title: PhotoSection.series.title,
+                    detail: "\(session.seriesCount)",
+                    busy: analysis.isRunning && session.seriesCount == 0,
+                    help: analysisHelp("Серии похожих кадров (⌘3)")
+                )
+            ] + (PhotoAnalyzer.peopleEnabled ? [
+                PCSegmentItem(
+                    id: 3,
+                    title: PhotoSection.people.title,
+                    detail: "\(session.peopleGroups.count)",
+                    busy: (analysis.isRunning || analysis.isGroupingPeople) && session.peopleGroups.isEmpty,
+                    help: analysisHelp("Люди, которые встречаются на нескольких кадрах (⌘4)")
+                )
+            ] : []),
+            selected: sectionID(session.section)
+        ) { id in
+            session.showSection([PhotoSection.all, .defects, .series, .people][id])
+        }
+    }
+
+    private var analysis: AnalysisStore { AnalysisStore.shared }
+
+    /// Пока идёт анализ — «Анализ: 412 из 812»
+    private func analysisHelp(_ base: String) -> String {
+        analysis.isRunning ? "\(base). Анализ: \(analysis.done) из \(analysis.total)" : base
+    }
+
+        private func sectionID(_ section: PhotoSection) -> Int {
+        switch section {
+        case .all: 0
+        case .defects: 1
+        case .series: 2
+        case .people: 3
+        }
+    }
+
+    private var emptySectionNote: String {
+        if analysis.isRunning {
+            return "Анализ ещё идёт: \(analysis.done) из \(analysis.total)"
+        }
+        if session.section == .defects {
+            return "При строгости «\(analysis.strictness.title)». Строгость меняется в Настройках (⌘,)"
+        }
+        if session.section == .people {
+            if analysis.isGroupingPeople { return "Группирую лица…" }
+            return "Человек — похожие лица, которые встречаются хотя бы на двух кадрах. Лица меньше 40 px не учитываются"
+        }
+        return "Серия — кадры, снятые подряд с интервалом до 3 секунд и похожие друг на друга"
+    }
+
+    /// Пустой раздел: не прячем, а объясняем
+    private var emptySection: some View {
+        let c = theme.c
+        return VStack(spacing: 10) {
+            Image(systemName: session.section == .defects ? "checkmark.seal"
+                  : session.section == .people ? "person.2.slash" : "square.stack.3d.up.slash")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(c.text3)
+            Text(session.section == .defects ? "Брака не нашлось"
+                 : session.section == .people ? "Людей не нашлось" : "Серий не нашлось")
+                .font(theme.headingFont)
+                .foregroundStyle(c.text1)
+            Text(emptySectionNote)
+                .font(.system(size: 12))
+                .foregroundStyle(c.text3)
+                .multilineTextAlignment(.center)
+            Button("Все фото") {
+                session.showSection(.all)
+            }
+            .buttonStyle(PCButtonStyle())
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
     private var grid: some View {
+        if session.section == .people && !session.isPersonOpened {
+            if session.peopleGroups.isEmpty {
+                emptySection
+            } else {
+                peopleTiles
+            }
+        } else if session.photos.isEmpty {
+            emptySection
+        } else {
+            gridContent
+        }
+    }
+
+    // MARK: - Люди
+
+    /// Плитки людей: лицо, номер, число кадров. Клик — кадры этого человека
+    private var peopleTiles: some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: max(130, session.gridThumbSize * 0.7)), spacing: spacing)],
+                spacing: spacing
+            ) {
+                ForEach(session.peopleGroups) { person in
+                    PersonTile(person: person)
+                        .onTapGesture { session.openPerson(person) }
+                }
+            }
+            .padding(padding)
+        }
+    }
+
+    /// Над кадрами открытого человека: «‹ Все люди · Человек 3 · 12 кадров»
+    private func personHeader(_ person: PersonGroup) -> some View {
+        let c = theme.c
+        return HStack(spacing: 10) {
+            Button {
+                session.closePerson()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.left")
+                    Text("Все люди")
+                    KeyCap("Esc", size: .small)
+                }
+            }
+            .buttonStyle(PCButtonStyle(kind: .ghost))
+            .focusable(false)
+            FaceThumb(url: person.coverURL, rect: person.coverRect)
+                .frame(width: 28, height: 28)
+                .clipShape(Circle())
+            Text("Человек \(person.number)")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(c.text1)
+            Text("\(person.photos.count) \(PhotoSession.plural(person.photos.count, "кадр", "кадра", "кадров"))")
+                .font(.system(size: 12).monospacedDigit())
+                .foregroundStyle(c.text3)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, padding)
+        .padding(.top, padding)
+    }
+
+    private var gridContent: some View {
         GeometryReader { geo in
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVGrid(
-                        columns: Array(
-                            repeating: GridItem(.flexible(), spacing: spacing, alignment: .top),
-                            count: columnCount
-                        ),
-                        spacing: spacing
-                    ) {
-                        ForEach(Array(session.photos.enumerated()), id: \.element) { item in
-                            GridCell(
-                                url: item.element,
-                                number: item.offset + 1,
-                                isSelected: item.offset == session.index || selection.contains(item.element),
-                                compact: session.gridThumbSize < 160 || theme.isQuiet,
-                                hasNotes: session.hasAnnotations(item.element),
-                                extras: session.companions(of: item.element).map { $0.pathExtension.uppercased() }
-                            )
-                            .id(item.element)
-                            .onTapGesture(count: 2) {
-                                session.open(item.offset)
-                            }
-                            .simultaneousGesture(
-                                TapGesture().onEnded { click(item.offset) }
-                            )
-                            .gesture(
-                                DragGesture(minimumDistance: 6)
-                                    .onChanged { _ in startDrag(item.offset) }
-                            )
-                            .contextMenu { contextMenu(item.offset) }
-                        }
+                    if let person = session.currentPerson {
+                        personHeader(person)
                     }
-                    .padding(padding)
+                    if session.section == .series {
+                        seriesList
+                    } else {
+                        LazyVGrid(columns: gridColumns, spacing: spacing) {
+                            ForEach(Array(session.photos.enumerated()), id: \.element) { item in
+                                cell(item.offset, item.element)
+                            }
+                        }
+                        .padding(padding)
+                    }
                 }
                 .onAppear {
                     gridWidth = geo.size.width
@@ -268,8 +501,136 @@ struct GridView: View {
         }
     }
 
+    private var gridColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: spacing, alignment: .top), count: columnCount)
+    }
+
+    /// Ячейка кадра `index` раздела
+    private func cell(_ index: Int, _ url: URL) -> some View {
+        let best = session.seriesBest(url)
+        return GridCell(
+            url: url,
+            number: index + 1,
+            isSelected: index == session.index || selection.contains(url),
+            compact: session.gridThumbSize < 160 || theme.isQuiet,
+            hasNotes: session.hasAnnotations(url),
+            extras: session.companions(of: url).map { $0.pathExtension.uppercased() },
+            // Значок брака — только в «Все фото»: в разделе «Брак» он у всех
+            defects: session.section == .all ? analysis.defects(for: url) : [],
+            label: session.showCalibration ? analysis.label(url) : nil,
+            bestNote: best?.bestNote,
+            // В «Браке» — причина вместо модели камеры
+            reasons: session.section == .defects ? analysis.defects(for: url) : [],
+            mark: marksEnabled ? MarkStore.shared.mark(url) : nil,
+            onMark: { session.applyMark($0, to: [url]) }
+        )
+        .id(url)
+        .onTapGesture(count: 2) {
+            session.open(index)
+        }
+        .simultaneousGesture(
+            TapGesture().onEnded { click(index) }
+        )
+        .gesture(
+            DragGesture(minimumDistance: 6)
+                .onChanged { _ in startDrag(index) }
+        )
+        .contextMenu { contextMenu(index) }
+    }
+
+    // MARK: - Серии
+
+    /// Серии с заголовками; каждая начинается с новой строки
+    private var seriesList: some View {
+        LazyVStack(alignment: .leading, spacing: 22) {
+            ForEach(session.visibleSeries) { block in
+                VStack(alignment: .leading, spacing: 10) {
+                    seriesHeader(block)
+                    LazyVGrid(columns: gridColumns, spacing: spacing) {
+                        ForEach(block.range, id: \.self) { i in
+                            if session.photos.indices.contains(i) {
+                                cell(i, session.photos[i])
+                            }
+                        }
+                    }
+                }
+                // Своя метка: без неё у серии тот же id, что у её первого кадра
+                .id(seriesAnchor(block))
+            }
+        }
+        .padding(padding)
+    }
+
+    private func seriesHeader(_ block: SeriesBlock) -> some View {
+        let c = theme.c
+        let opened = session.isSeriesOpened
+        return HStack(spacing: 10) {
+            if opened {
+                Button {
+                    session.closeSeries()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.left")
+                        Text("Все серии")
+                        KeyCap("Esc", size: .small)
+                    }
+                }
+                .buttonStyle(PCButtonStyle(kind: .ghost))
+                .focusable(false)
+            }
+            Text("Серия \(block.number)")
+                .font(theme.isContact ? .system(size: 14, weight: .semibold, design: .serif) : .system(size: 13, weight: .semibold))
+                .foregroundStyle(c.text1)
+            Text(seriesDetails(block))
+                .font(.system(size: 12).monospacedDigit())
+                .foregroundStyle(c.text3)
+            Spacer(minLength: 8)
+            if !opened {
+                Button("Открыть") {
+                    session.openSeries(block)
+                }
+                .buttonStyle(PCButtonStyle(kind: .ghost))
+                .focusable(false)
+                .help("Показать только эту серию")
+            }
+        }
+        .padding(.bottom, 2)
+        .overlay(alignment: .bottom) {
+            if !theme.isQuiet {
+                Rectangle().fill(c.line).frame(height: 1).offset(y: 5)
+            }
+        }
+    }
+
+    /// «8 кадров · 14:32:05 · 2,4 с»
+    private func seriesDetails(_ block: SeriesBlock) -> String {
+        let count = block.members.count
+        var parts = ["\(count) \(PhotoSession.plural(count, "кадр", "кадра", "кадров"))"]
+        if let start = block.start {
+            parts.append(start.formatted(date: .omitted, time: .standard))
+        }
+        if block.duration > 0 {
+            parts.append(String(format: "%.1f с", block.duration).replacingOccurrences(of: ".", with: ","))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func seriesAnchor(_ block: SeriesBlock) -> String {
+        "series-" + block.id.path
+    }
+
     private func scrollToCurrent(_ proxy: ScrollViewProxy, anchor: UnitPoint?, animated: Bool) {
         guard let url = session.currentPhoto else { return }
+        // В «Сериях» кадры лежат в сетках внутри ленивого списка: до ещё не созданной ячейки scrollTo
+        // не достаёт, и после просмотра сетка оставалась наверху. Сначала — к серии, потом к кадру
+        if !animated, session.section == .series,
+           let block = session.visibleSeries.first(where: { $0.range.contains(session.index) }) {
+            proxy.scrollTo(seriesAnchor(block), anchor: .top)
+            DispatchQueue.main.async {
+                proxy.scrollTo(url, anchor: anchor)
+            }
+            return
+        }
         if animated {
             withAnimation(.easeOut(duration: 0.15)) {
                 proxy.scrollTo(url, anchor: anchor)
@@ -370,6 +731,41 @@ struct GridView: View {
         Button("Выбрать все") {
             selectAll()
         }
+        if marksEnabled {
+            Divider()
+            Menu("Звёзды") {
+                ForEach(0...5, id: \.self) { n in
+                    Button(n == 0 ? "Без звёзд (⌥0)" : "\(String(repeating: "★", count: n)) (⌥\(n))") {
+                        session.applyMark(.rating(n), to: urls)
+                    }
+                }
+            }
+            Menu("Цвет") {
+                Button("Без цвета (⌃0)") { session.applyMark(.color(0), to: urls) }
+                ForEach(ColorClass.allCases) { color in
+                    Button {
+                        session.applyMark(.color(color.rawValue), to: urls)
+                    } label: {
+                        Label { Text("\(color.title) (⌃\(color.rawValue))") } icon: { Image(nsImage: color.menuDot) }
+                    }
+                }
+            }
+            Button("Записать в XMP") {
+                session.exportMarks(urls)
+            }
+        }
+        if session.sectionsAvailable {
+            Divider()
+            Menu("Калибровка брака") {
+                Button("Это брак") { analysis.setLabel(urls, true) }
+                Button("Это норма") { analysis.setLabel(urls, false) }
+                Button("Снять разметку") { analysis.setLabel(urls, nil) }
+                Divider()
+                Button(session.showCalibration ? "Скрыть панель калибровки" : "Показать панель калибровки") {
+                    withAnimation(.easeOut(duration: 0.2)) { session.showCalibration.toggle() }
+                }
+            }
+        }
         if !selection.isEmpty {
             Button("Снять выделение") {
                 selection = []
@@ -380,6 +776,11 @@ struct GridView: View {
     // MARK: - Клавиатура
 
     private func handleEvent(_ event: NSEvent) -> Bool {
+        // ⌥0–⌥5 — звёзды, ⌃0–⌃8 — цвет: выделению, а без него — текущему кадру
+        if let command = MarkCommand(event) {
+            session.applyMark(command, to: currentTargets)
+            return true
+        }
         // Коды клавиш не зависят от раскладки
         if event.modifierFlags.contains(.command) {
             switch event.keyCode {
@@ -428,21 +829,33 @@ struct GridView: View {
             session.select(session.index - 1)
         case 124, 49: // →, пробел
             session.select(session.index + 1)
-        case 126: // ↑
-            session.select(session.index - columns)
-        case 125: // ↓
-            session.select(min(session.index + columns, last))
+        case 126: // ↑ (в списке серий — к предыдущей серии)
+            if session.section == .series && !session.isSeriesOpened {
+                session.jumpSeries(-1)
+            } else {
+                session.select(session.index - columns)
+            }
+        case 125: // ↓ (в списке серий — к следующей серии)
+            if session.section == .series && !session.isSeriesOpened {
+                session.jumpSeries(1)
+            } else {
+                session.select(min(session.index + columns, last))
+            }
         case 115: // Home
             session.select(0)
         case 119: // End
             session.select(last)
         case 51, 117: // Delete
             session.trashCurrent()
-        case 53: // Esc — сначала снять выделение, потом выйти
-            if selection.isEmpty {
-                session.stopReview()
-            } else {
+        case 53: // Esc — сначала снять выделение, потом закрыть серию, потом выйти
+            if !selection.isEmpty {
                 selection = []
+            } else if session.isSeriesOpened {
+                session.closeSeries()
+            } else if session.isPersonOpened {
+                session.closePerson()
+            } else {
+                session.stopReview()
             }
         default:
             guard let first = event.charactersIgnoringModifiers?.first, first.isWholeNumber else {
@@ -464,6 +877,17 @@ private struct GridCell: View {
     let hasNotes: Bool
     /// Расширения остальных файлов кадра: ["NEF"] для пары JPG + NEF
     let extras: [String]
+    /// Пометки брака (пусто — значка нет)
+    var defects: [Defect] = []
+    /// Ручная разметка для калибровки: true — брак, false — норма (видна, пока открыта панель)
+    var label: Bool? = nil
+    /// Лучший кадр серии — почему (nil — не лучший)
+    var bestNote: String? = nil
+    /// Причины брака для подписи (только в разделе «Брак»)
+    var reasons: [Defect] = []
+    /// Звёзды и цвет; nil — функция выключена
+    var mark: PhotoMark? = nil
+    var onMark: (MarkCommand) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @State private var thumbnail: Thumbnail?
@@ -514,6 +938,10 @@ private struct GridCell: View {
 
     private var cellFill: Color {
         let c = theme.c
+        // Цветовая метка — подложка ячейки; выделение важнее
+        if !isSelected, let color = mark.flatMap({ ColorClass(rawValue: $0.color) }) {
+            return color.color.opacity(hovered ? 0.3 : 0.22)
+        }
         switch theme.direction {
         case .studio:
             return isSelected ? c.selectionFill : (hovered ? c.surface1 : .clear)
@@ -587,6 +1015,76 @@ private struct GridCell: View {
                     .padding(6)
             }
         }
+        .overlay(alignment: .topLeading) {
+            if !defects.isEmpty {
+                defectBadge
+                    .padding(6)
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if let bestNote {
+                bestBadge(bestNote)
+                    .padding(6)
+            }
+        }
+        .overlay(alignment: .bottomLeading) {
+            if let label {
+                Image(systemName: label ? "xmark.circle.fill" : "checkmark.circle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.white, label ? theme.c.danger : theme.c.success)
+                    .padding(6)
+                    .help(label ? "Размечено: брак" : "Размечено: норма")
+            }
+        }
+    }
+
+    /// «⚠︎ Размыто, Темно» — причины брака; подробности в подсказке
+    private var reasonLine: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(theme.c.warning)
+            Text(reasons.map(\.reason.title).joined(separator: ", "))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.c.text2)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .help(reasons.map { $0.detail.isEmpty ? $0.reason.title : "\($0.reason.title): \($0.detail)" }.joined(separator: "\n"))
+    }
+
+    /// «★ Лучший» на лучшем кадре серии
+    private func bestBadge(_ note: String) -> some View {
+        let c = theme.c
+        return HStack(spacing: 3) {
+            Image(systemName: "star.fill")
+                .font(.system(size: 9, weight: .bold))
+            Text("Лучший")
+                .font(.system(size: 10.5, weight: .semibold))
+        }
+        .foregroundStyle(c.onAccent)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(c.accentFill, in: Capsule())
+        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+        .help(note)
+    }
+
+    /// Маленький значок брака; причины — в подсказке
+    private var defectBadge: some View {
+        let c = theme.c
+        return Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(c.warning)
+            .frame(width: 18, height: 18)
+            .background {
+                if !theme.isQuiet {
+                    Circle().fill(c.overlay)
+                    Circle().stroke(c.line, lineWidth: 1)
+                }
+            }
+            .shadow(color: .black.opacity(theme.isLight ? 0.15 : 0), radius: 1.5, y: 1)
+            .help(defects.map { "\($0.reason.title): \($0.detail)" }.joined(separator: "\n"))
     }
 
     /// Значок «есть пометки» в правом верхнем углу миниатюры
@@ -610,14 +1108,22 @@ private struct GridCell: View {
     private func caption(_ info: PhotoInfo?) -> some View {
         let c = theme.c
         if theme.isQuiet {
-            HStack(spacing: 4) {
-                Text(url.lastPathComponent)
-                    .font(.system(size: 11))
-                    .foregroundStyle(isSelected ? c.text1 : c.text3)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if !extras.isEmpty {
-                    pairTag
+            VStack(spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(url.lastPathComponent)
+                        .font(.system(size: 11))
+                        .foregroundStyle(isSelected ? c.text1 : c.text3)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if !extras.isEmpty {
+                        pairTag
+                    }
+                    if let mark {
+                        markEditor(mark)
+                    }
+                }
+                if !reasons.isEmpty {
+                    reasonLine
                 }
             }
             .frame(maxWidth: .infinity)
@@ -632,21 +1138,42 @@ private struct GridCell: View {
                     if !extras.isEmpty {
                         pairTag
                     }
+                    if let mark, !mark.isEmpty || hovered || isSelected {
+                        Spacer(minLength: 4)
+                        markEditor(mark)
+                    }
                 }
                 if !compact {
                     // Строки есть всегда, чтобы все ячейки были одной высоты
                     Text(details(info))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(c.text3)
-                    Text(info?.camera ?? " ")
-                        .font(.system(size: 11))
-                        .foregroundStyle(c.text3)
+                    if reasons.isEmpty {
+                        Text(info?.camera ?? " ")
+                            .font(.system(size: 11))
+                            .foregroundStyle(c.text3)
+                    } else {
+                        reasonLine
+                    }
+                } else if !reasons.isEmpty {
+                    reasonLine
                 }
             }
             .lineLimit(1)
             .truncationMode(.middle)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Звёзды и цвет: пустые видны при наведении и у выбранного кадра
+    private func markEditor(_ mark: PhotoMark) -> some View {
+        MarkEditor(
+            mark: mark,
+            size: 10,
+            showsEmpty: hovered || isSelected,
+            onRating: { onMark(.rating($0)) },
+            onColor: { onMark(.color($0)) }
+        )
     }
 
     /// Метка пары: «+NEF» — у кадра есть ещё и RAW
@@ -731,5 +1258,89 @@ final class FileDrag: NSObject, NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         FileDrag.isDragging = false
+    }
+}
+
+// MARK: - Плитка человека
+
+/// Плитка в разделе «Люди»: лицо крупно, номер и число кадров
+private struct PersonTile: View {
+    let person: PersonGroup
+
+    @Environment(\.theme) private var theme
+    @State private var hovered = false
+
+    var body: some View {
+        let c = theme.c
+        let shape = RoundedRectangle(cornerRadius: theme.rMd)
+        VStack(spacing: 8) {
+            FaceThumb(url: person.coverURL, rect: person.coverRect)
+                .aspectRatio(1, contentMode: .fit)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(c.line, lineWidth: 1))
+                .padding(.horizontal, 12)
+            VStack(spacing: 1) {
+                Text("Человек \(person.number)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(c.text1)
+                Text("\(person.photos.count) \(PhotoSession.plural(person.photos.count, "кадр", "кадра", "кадров"))")
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(c.text3)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(hovered ? c.surface2 : c.surface1, in: shape)
+        .contentShape(shape)
+        .onHover { hovered = $0 }
+        .help("Показать кадры с этим человеком")
+    }
+}
+
+/// Лицо, вырезанное из миниатюры кадра (с полями, квадратом)
+struct FaceThumb: View {
+    let url: URL
+    /// Лицо в долях кадра, начало сверху слева
+    let rect: CGRect
+
+    @Environment(\.theme) private var theme
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            theme.c.surface2
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFill()
+            } else {
+                Image(systemName: "person.fill")
+                    .foregroundStyle(theme.c.text3)
+            }
+        }
+        .task(id: "\(url.path)|\(rect.minX)|\(rect.minY)") {
+            let thumb: Thumbnail?
+            if let cached = ThumbnailLoader.cached(url) {
+                thumb = cached
+            } else {
+                thumb = await ThumbnailLoader.load(url)
+            }
+            guard !Task.isCancelled, let source = thumb?.image,
+                  let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+            image = Self.crop(cg, rect: rect)
+        }
+    }
+
+    /// Квадрат вокруг лица в 1,6 раза больше лица. У края кадра квадрат сдвигается внутрь, а не обрезается —
+    /// иначе выходил прямоугольник и лицо уезжало из центра круга
+    private static func crop(_ image: CGImage, rect: CGRect) -> NSImage? {
+        let w = CGFloat(image.width), h = CGFloat(image.height)
+        let side = min(max(rect.width * w, rect.height * h) * 1.6, w, h)
+        let x = min(max(0, rect.midX * w - side / 2), w - side)
+        let y = min(max(0, rect.midY * h - side / 2), h - side)
+        let square = CGRect(x: x, y: y, width: side, height: side).integral
+        guard square.width >= 4, square.height >= 4, let cropped = image.cropping(to: square) else { return nil }
+        return NSImage(cgImage: cropped, size: NSSize(width: cropped.width, height: cropped.height))
     }
 }

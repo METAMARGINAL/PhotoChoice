@@ -54,6 +54,39 @@ struct PhotoChoiceApp: App {
 
                 Divider()
 
+                Button("Все фото") {
+                    session.showSection(.all)
+                }
+                .keyboardShortcut("1", modifiers: [.command])
+                .disabled(!session.isViewing)
+
+                Button("Брак") {
+                    session.showSection(.defects)
+                }
+                .keyboardShortcut("2", modifiers: [.command])
+                .disabled(!session.isViewing || !session.sectionsAvailable)
+
+                Button("Серии") {
+                    session.showSection(.series)
+                }
+                .keyboardShortcut("3", modifiers: [.command])
+                .disabled(!session.isViewing || !session.sectionsAvailable)
+
+                Button("Люди") {
+                    session.showSection(.people)
+                }
+                .keyboardShortcut("4", modifiers: [.command])
+                .disabled(!session.isViewing || !session.sectionsAvailable || !PhotoAnalyzer.peopleEnabled)
+
+                Button(session.showCalibration ? "Скрыть калибровку брака" : "Калибровка брака") {
+                    if session.viewMode == .single { session.toggleViewMode() }
+                    session.showCalibration.toggle()
+                }
+                .keyboardShortcut("k", modifiers: [.command, .option])
+                .disabled(!session.isViewing || !session.sectionsAvailable || session.viewMode == .compare)
+
+                Divider()
+
                 Button("Выйти из просмотра") {
                     session.stopReview()
                 }

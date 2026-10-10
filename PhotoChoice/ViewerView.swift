@@ -5,8 +5,14 @@ struct ViewerView: View {
     @Bindable var session: PhotoSession
 
     @Environment(\.theme) private var theme
+    @AppStorage("marksEnabled") private var marksEnabled = false
 
     @State private var currentImage: NSImage?
+    /// Тот же кадр в полном разрешении — подгружается, когда при зуме пикселей превью уже не хватает
+    @State private var fullImage: NSImage?
+    @State private var loadingFullFor: URL?
+    /// Кадр из «Брака», который уже открыли сразу на проблемном месте (второй раз не прыгаем)
+    @State private var autoZoomedFor: URL?
 
     @State private var dragOffset: CGSize = .zero
 
@@ -91,9 +97,14 @@ struct ViewerView: View {
         .onAppear { pokeHUD() }
         .onChange(of: session.currentPhoto, initial: true) { _, url in
             resetTransform()
+            fullImage = url.flatMap { ImageLoader.cachedFullImage(at: $0) }
             if let url, let cached = ImageLoader.cachedImage(at: url) {
                 currentImage = cached
+                applyAutoZoom()
             }
+        }
+        .onChange(of: zoom) { _, _ in
+            upgradeResolutionIfNeeded()
         }
         .onChange(of: session.isDrawing) { _, _ in pokeHUD() }
         .onDisappear {
@@ -134,7 +145,7 @@ struct ViewerView: View {
         GeometryReader { geo in
             ZStack {
                 if let currentImage {
-                    Image(nsImage: currentImage)
+                    Image(nsImage: fullImage ?? currentImage)
                         .resizable()
                         .scaledToFit()
                         .overlay {
@@ -178,7 +189,10 @@ struct ViewerView: View {
                 }
             }
             .contentShape(Rectangle())
-            .onAppear { containerSize = geo.size }
+            .onAppear {
+                containerSize = geo.size
+                applyAutoZoom()
+            }
             .onChange(of: geo.size) { _, newSize in
                 containerSize = newSize
                 pan = clampedPan(pan)
@@ -199,6 +213,13 @@ struct ViewerView: View {
     private var hud: some View {
         VStack(spacing: 0) {
             topbar
+            if session.section == .defects, let url = session.currentPhoto {
+                let defects = AnalysisStore.shared.defects(for: url)
+                if !defects.isEmpty {
+                    defectLine(defects)
+                        .padding(.top, 10)
+                }
+            }
             Spacer(minLength: 0)
             if session.isDrawing {
                 DrawToolbar(session: session)
@@ -212,7 +233,8 @@ struct ViewerView: View {
                         Hint("1–9", label: "в папку"),
                         Hint("⌫", label: "корзина"),
                         Hint("Z", label: "отмена")
-                    ]),
+                    ])
+                ] + (marksEnabled ? [MarkHints.group] : []) + [
                     HintGroup(title: "Вид", hints: [
                         Hint("I", label: "инфо"),
                         Hint("D", label: "рисовать"),
@@ -252,6 +274,14 @@ struct ViewerView: View {
                         Text("+ " + session.companions(of: url).map { $0.pathExtension.uppercased() }.joined(separator: " + "))
                             .font(theme.numFont)
                             .foregroundStyle(c.text3)
+                    }
+                    if marksEnabled, let url = session.currentPhoto {
+                        MarkEditor(
+                            mark: MarkStore.shared.mark(url),
+                            size: 12,
+                            onRating: { session.applyMark(.rating($0)) },
+                            onColor: { session.applyMark(.color($0)) }
+                        )
                     }
                 }
             }
@@ -319,12 +349,45 @@ struct ViewerView: View {
         }
     }
 
+    /// Причина брака под верхней панелью: «Размыто — Мало мелких деталей…»
+    private func defectLine(_ defects: [Defect]) -> some View {
+        let c = theme.c
+        let text = defects.prefix(2).map { defect in
+            defect.detail.isEmpty ? defect.reason.title : "\(defect.reason.title) — \(defect.detail)"
+        }.joined(separator: "  ·  ")
+        let line = HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(c.warning)
+            Text(text)
+                .foregroundStyle(c.text1)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 12)
+        .frame(height: 28)
+        return Group {
+            if theme.isGlass {
+                line.glassEffect(.regular, in: .capsule)
+            } else {
+                line
+                    .background(c.overlay, in: Capsule())
+                    .overlay(Capsule().stroke(c.line, lineWidth: 1))
+            }
+        }
+        .help("Двойной клик — вписать кадр в экран")
+    }
+
     /// «12 / 480»
     private var counter: some View {
         let c = theme.c
         let total = session.photos.count
         let current = total == 0 ? 0 : session.index + 1
         return HStack(spacing: 0) {
+            if session.section != .all {
+                Text("\(session.section.title) · ")
+                    .foregroundStyle(c.accent)
+            }
             Text("\(current)")
                 .fontWeight(.semibold)
                 .foregroundStyle(theme.isContact ? c.edge : c.text1)
@@ -580,17 +643,79 @@ struct ViewerView: View {
         }
         if let cached = ImageLoader.cachedImage(at: url) {
             currentImage = cached
+            applyAutoZoom()
             return
         }
         currentImage = nil
         let image = await ImageLoader.imageAsync(at: url)
         guard !Task.isCancelled, url == session.currentPhoto else { return }
         currentImage = image
+        applyAutoZoom()
+    }
+
+    // MARK: - Полное разрешение и проблемное место
+
+    /// Размер фото на экране при «вписать», в точках
+    private var fittedSize: CGSize? {
+        guard let image = currentImage, image.size.width > 0, image.size.height > 0,
+              containerSize.width > 0, containerSize.height > 0 else { return nil }
+        let availW = max(containerSize.width - insets.leading * 2, 1)
+        let availH = max(containerSize.height - insets.top * 2, 1)
+        let fit = min(availW / image.size.width, availH / image.size.height)
+        return CGSize(width: image.size.width * fit, height: image.size.height * fit)
+    }
+
+    private var backingScale: CGFloat {
+        NSScreen.main?.backingScaleFactor ?? 2
+    }
+
+    /// При крупном зуме превью (2400 px) уже мыльное — подгружаем кадр в полном разрешении.
+    /// Подмена незаметна: размер на экране тот же, становится только чётче
+    private func upgradeResolutionIfNeeded() {
+        guard fullImage == nil, let url = session.currentPhoto, loadingFullFor != url,
+              let preview = currentImage, let fitted = fittedSize,
+              fitted.width * zoom * backingScale > preview.size.width * 1.1 else { return }
+        loadingFullFor = url
+        Task {
+            let image = await ImageLoader.fullImageAsync(at: url)
+            if loadingFullFor == url { loadingFullFor = nil }
+            guard url == session.currentPhoto, let image, image.size.width > preview.size.width else { return }
+            fullImage = image
+        }
+    }
+
+    /// Открывать кадр из «Брака» сразу на проблемном месте (настройка, по умолчанию вкл.)
+    private var autoZoomEnabled: Bool {
+        UserDefaults.standard.object(forKey: "defectAutoZoom") as? Bool ?? true
+    }
+
+    /// Кадр из «Брака» с размытием или глазами: сразу 100 % (пиксель снимка = пиксель экрана)
+    /// с центром на глазах крупного лица или на объекте — так фотограф и проверяет фокус. Двойной клик — «вписать»
+    private func applyAutoZoom() {
+        guard session.section == .defects, autoZoomEnabled, !session.isDrawing,
+              let url = session.currentPhoto, autoZoomedFor != url,
+              currentImage != nil, let fitted = fittedSize else { return }
+        let focusReasons: Set<DefectReason> = [.blur, .softer, .eyesClosed, .learned]
+        guard AnalysisStore.shared.defects(for: url).contains(where: { focusReasons.contains($0.reason) }),
+              let point = AnalysisStore.shared.focusPoint(for: url),
+              let pixels = ImageLoader.pixelSize(url) else { return }
+        autoZoomedFor = url
+        let target = min(maxZoom, max(1.5, pixels.width / (fitted.width * backingScale)))
+        let offset = CGSize(
+            width: -(point.x - 0.5) * fitted.width * target,
+            height: -(point.y - 0.5) * fitted.height * target
+        )
+        zoom = target
+        pan = clampedPan(offset)
     }
 
     // MARK: - Клавиатура
 
     private func handleEvent(_ event: NSEvent) -> Bool {
+        if let mark = MarkCommand(event) {
+            session.applyMark(mark)
+            return true
+        }
         // Коды клавиш не зависят от раскладки (работает и на русской)
         let command = event.modifierFlags.contains(.command)
 

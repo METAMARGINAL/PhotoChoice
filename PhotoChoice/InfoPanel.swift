@@ -24,9 +24,15 @@ struct InfoPanel: View {
                 if paletteEnabled {
                     PaletteSection(url: url)
                 }
+                if let defectSection {
+                    sectionView(defectSection)
+                }
                 if !companions.isEmpty {
                     sectionView(filesSection)
                 }
+                #if DEBUG
+                sectionView(analysisDebugSection)
+                #endif
                 if let details {
                     ForEach(details.sections) { section in
                         sectionView(section)
@@ -237,6 +243,86 @@ struct InfoPanel: View {
     }
 
     // MARK: - Секции
+
+    #if DEBUG
+    /// Сырые метрики анализа (только в отладочной сборке) — для подбора порогов брака
+    private var analysisDebugSection: InfoSection {
+        let store = AnalysisStore.shared
+        guard let m = store.metrics(for: url) else {
+            let state = store.isRunning ? "в очереди (\(store.done) из \(store.total))" : "нет данных"
+            return InfoSection(title: "Анализ · отладка", rows: [InfoRow(label: "Статус", value: state)])
+        }
+        func f(_ value: Double, _ digits: Int = 1) -> String { String(format: "%.\(digits)f", value) }
+        func pct(_ value: Double) -> String { f(value * 100) + " %" }
+        var rows: [InfoRow] = [
+            InfoRow(label: "Резкость объекта", value: f(m.sharpness, 0)),
+            InfoRow(label: "Резкость кадра", value: f(m.sharpnessGlobal, 0)),
+            InfoRow(label: "Объект", value: m.subjectRect.map { "x \(f($0.minX, 2)) y \(f($0.minY, 2)) · \(f($0.width, 2))×\(f($0.height, 2))" } ?? "—"),
+            InfoRow(label: "Пересвет / провал", value: "\(pct(m.clipHigh)) / \(pct(m.clipLow))"),
+            InfoRow(label: "Яркость", value: f(m.meanLuma, 2)),
+            InfoRow(label: "Горизонт", value: m.horizonAngle.map { f($0) + "°" } ?? "не найден"),
+            InfoRow(label: "Эстетика", value: m.aesthetics.map { f($0, 2) } ?? "—"),
+            InfoRow(label: "Служебный", value: m.isUtility.map { $0 ? "да" : "нет" } ?? "—"),
+            InfoRow(label: "Выдержка", value: m.exposureTime.map { f($0, 4) + " с" } ?? "—"),
+            InfoRow(label: "Время съёмки", value: m.captureDate.map { $0.formatted(date: .numeric, time: .standard) } ?? "—"),
+            InfoRow(label: "Отпечаток", value: m.featurePrintCount.map { "\($0) чисел" } ?? "—"),
+            InfoRow(label: "Размер анализа", value: "\(m.analyzedWidth)×\(m.analyzedHeight)"),
+            InfoRow(label: "Лиц", value: "\(m.faces.count)")
+        ]
+        for (i, face) in m.faces.enumerated() {
+            let area = face.rect.width * face.rect.height
+            let eyes = "\(face.leftEye.map { f($0, 2) } ?? "—")/\(face.rightEye.map { f($0, 2) } ?? "—")"
+            let details = "глаза \(eyes) · кач. \(face.quality.map { f($0, 2) } ?? "—") · yaw \(face.yaw.map { f($0, 0) } ?? "—")° · \(pct(area))"
+            rows.append(InfoRow(label: "Лицо \(i + 1)", value: details + " · ярк. \(face.luma.map { f($0, 2) } ?? "—")"))
+        }
+        rows.append(InfoRow(label: "Детали объекта", value: m.detailRatio.map { f($0, 3) } ?? "—"))
+        rows.append(InfoRow(label: "Детали кадра", value: m.detailRatioGlobal.map { f($0, 3) } ?? "—"))
+        rows.append(InfoRow(label: "Яркость объекта", value: m.subjectLuma.map { f($0, 2) } ?? "—"))
+        rows.append(InfoRow(label: "Почти белые", value: m.clipWhite.map { pct($0) } ?? "—"))
+        rows.append(InfoRow(label: "Белые на лицах / объекте", value: "\(m.faces.compactMap(\.white).max().map { pct($0) } ?? "—") / \(m.subjectWhite.map { pct($0) } ?? "—")"))
+        rows.append(InfoRow(label: "Резкость 100 %", value: m.fullSharpness.map { f($0, 0) } ?? "—"))
+        rows.append(InfoRow(label: "Детали 100 %", value: m.fullDetailRatio.map { f($0, 3) } ?? "—"))
+        if let context = store.contexts[url] {
+            rows.append(InfoRow(label: "Серия", value: "\((context.series ?? 0) + 1) · \(context.seriesSize) кадров"))
+            rows.append(InfoRow(label: "К лучшему соседу", value: context.relSharpness.map { pct($0) } ?? "—"))
+        }
+        if let p = store.probabilities[url] {
+            rows.append(InfoRow(label: "По разметке: брак", value: pct(p)))
+        }
+        if m.clipModel != nil {
+            func has(_ data: Data?) -> String { data == nil ? "нет" : "да" }
+            let faceVectors = m.faces.filter { $0.clip != nil }.count
+            rows.append(InfoRow(label: "Векторы MobileCLIP", value: "кадр \(has(m.clipFrame)) · 100 % \(has(m.clipFocus)) · лиц \(faceVectors)"))
+            if let s = store.signals[url] {
+                func p(_ value: Double?) -> String { value.map { pct($0) } ?? "—" }
+                let eyes = s.closed.sorted { $0.key < $1.key }.map { "лицо \($0.key + 1): \(pct($0.value))" }
+                rows.append(InfoRow(label: "Модель: не в фокусе", value: p(s.blur)))
+                rows.append(InfoRow(label: "Модель: смаз кадра", value: p(s.motion)))
+                rows.append(InfoRow(label: "Модель: глаза закрыты", value: eyes.isEmpty ? "—" : eyes.joined(separator: " · ")))
+                rows.append(InfoRow(label: "Модель: случайный", value: p(s.accidental)))
+                rows.append(InfoRow(label: "Модель: пересвет", value: p(s.overexposed)))
+            } else {
+                rows.append(InfoRow(label: "Модель", value: "подсказки не посчитаны"))
+            }
+        }
+        rows.append(InfoRow(label: "Медиана резкости", value: store.folderStats.medianSharpness.map { f($0, 0) } ?? "—"))
+        rows.append(InfoRow(label: "Медиана 100 %", value: store.folderStats.medianFullSharpness.map { f($0, 0) } ?? "—"))
+        for defect in store.candidates[url] ?? [] {
+            rows.append(InfoRow(label: "? " + defect.reason.title, value: f(defect.confidence, 2)))
+        }
+        return InfoSection(title: "Анализ · отладка", rows: rows)
+    }
+    #endif
+
+    /// «Брак»: причины пометок при текущей строгости (умный отбор)
+    private var defectSection: InfoSection? {
+        let defects = AnalysisStore.shared.defects(for: url)
+        guard !defects.isEmpty else { return nil }
+        return InfoSection(
+            title: "Брак",
+            rows: defects.map { InfoRow(label: $0.reason.title, value: $0.detail) }
+        )
+    }
 
     /// «Файлы кадра»: формат → имя и размер каждого файла пары
     private var filesSection: InfoSection {

@@ -11,6 +11,7 @@ struct CompareView: View {
     @Bindable var session: PhotoSession
 
     @Environment(\.theme) private var theme
+    @AppStorage("marksEnabled") private var marksEnabled = false
 
     @State private var leftImage: NSImage?
     @State private var rightImage: NSImage?
@@ -125,7 +126,9 @@ struct CompareView: View {
             .contentShape(Rectangle())
             .overlay(alignment: theme.isGlass ? .bottom : .topLeading) {
                 if let url {
-                    PaneHeader(url: url, side: side, position: position(of: url), isActive: isActive)
+                    PaneHeader(url: url, side: side, position: position(of: url), isActive: isActive,
+                               mark: marksEnabled ? MarkStore.shared.mark(url) : nil,
+                               onMark: { session.applyMark($0, to: [url]) })
                         .padding(theme.isGlass ? EdgeInsets(top: 0, leading: 0, bottom: 84, trailing: 0)
                                               : EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
                 }
@@ -498,6 +501,11 @@ struct CompareView: View {
     // MARK: - Клавиатура
 
     private func handleEvent(_ event: NSEvent) -> Bool {
+        // Звёзды и цвет — активной стороне
+        if let mark = MarkCommand(event) {
+            session.applyMark(mark)
+            return true
+        }
         switch event.keyCode {
         case 6: // Z / ⌘Z
             session.undo()
@@ -589,6 +597,9 @@ private struct PaneHeader: View {
     let side: CompareSide
     let position: String
     let isActive: Bool
+    /// Звёзды и цвет; nil — функция выключена
+    var mark: PhotoMark? = nil
+    var onMark: (MarkCommand) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @State private var details: PhotoDetails?
@@ -613,6 +624,14 @@ private struct PaneHeader: View {
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(c.text3)
                     .lineLimit(1)
+            }
+            if let mark {
+                MarkEditor(
+                    mark: mark,
+                    size: 11,
+                    onRating: { onMark(.rating($0)) },
+                    onColor: { onMark(.color($0)) }
+                )
             }
         }
 

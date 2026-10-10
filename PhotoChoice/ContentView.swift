@@ -22,13 +22,13 @@ struct ContentView: View {
         let dark = Theme.make(direction, light: false)
         let screenTheme: Theme = {
             guard session.isViewing else { return chrome }
-            if session.viewMode == .grid && !session.photos.isEmpty { return chrome }
+            if session.viewMode == .grid && !session.allPhotos.isEmpty { return chrome }
             return dark
         }()
 
         Group {
             if session.isViewing {
-                if session.viewMode == .grid && !session.photos.isEmpty {
+                if session.viewMode == .grid && !session.allPhotos.isEmpty {
                     GridView(session: session)
                 } else if session.viewMode == .compare && session.photos.count >= 2 {
                     CompareView(session: session)

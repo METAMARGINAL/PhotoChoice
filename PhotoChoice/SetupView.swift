@@ -99,7 +99,9 @@ struct SetupView: View {
     private var destinationsCard: some View {
         card("02", "Папки назначения", trailing: "клавиши 1–9") {
             if session.destinations.isEmpty {
-                Text("Если ничего не добавить, при старте внутри исходной папки создастся папка «Отобранные».")
+                Text(PhotoSession.autoKeepFolder
+                     ? "Если ничего не добавить, клавиша 1 будет переносить в папку «Отобранные» внутри исходной. Она появится при первом переносе."
+                     : "Папок назначения нет: кадры можно удалять, копировать и сравнивать. Папку «Отобранные» по умолчанию можно включить в Настройках (⌘,).")
                     .font(.system(size: 12))
                     .foregroundStyle(theme.c.text2)
                     .fixedSize(horizontal: false, vertical: true)

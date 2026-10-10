@@ -34,8 +34,36 @@ struct SettingsView: View {
     @AppStorage("themeDirection") private var direction: ThemeDirection = .studio
     @AppStorage("appearanceMode") private var appearance: AppearanceMode = .system
     @AppStorage("pairRawJpeg") private var pairRawJpeg = true
+    @AppStorage("autoKeepFolder") private var autoKeepFolder = true
+    @AppStorage("smartAnalysis") private var smartAnalysis = true
+    @State private var cacheSize: Int64 = 0
     @AppStorage("renameOnMove") private var renameOnMove = false
+    @Bindable private var analysisStore = AnalysisStore.shared
+    @AppStorage("seriesGap") private var seriesGap: Double = 3
+    @AppStorage("defectAutoZoom") private var defectAutoZoom = true
+    @AppStorage("peopleEnabled") private var peopleEnabled = true
+    @AppStorage("peopleDistance") private var peopleDistance: Double = PeopleGrouping.defaultDistance
+    @AppStorage("qualityModelEnabled") private var qualityModelEnabled = true
+    @AppStorage("marksEnabled") private var marksEnabled = false
     @AppStorage("renameStyle") private var renameStyle: RenameStyle = .dateTimeOriginal
+
+    private var peopleNote: String {
+        let common = "Лица, которые встречаются хотя бы на двух кадрах, собираются в «людей». «Строго» — больше людей и меньше путаницы, «Свободно» — меньше дробления. Описания лиц хранятся только в кэше анализа на этом Mac."
+        guard FaceModel.isBundled else {
+            return common + " Модель распознавания лиц не добавлена (AuraFace, см. README): сейчас лица сравниваются по общему описанию картинки и людей часто путают."
+        }
+        return common + " Лица сравнивает модель распознавания AuraFace. Кадры, разобранные без неё, при следующем открытии папки проанализируются заново."
+    }
+
+    private var qualityModelNote: String {
+        guard QualityModel.isBundled else {
+            return "Модель не добавлена в приложение (≈70 МБ, скачивается отдельно — см. README). Без неё брак ищется по метрикам, как раньше."
+        }
+        let prompts = analysisStore.prompts == nil
+            ? "Подсказки не посчитаны: «Калибровка брака» → «Модель MobileCLIP»."
+            : "Подсказки посчитаны."
+        return "Нейросеть Apple оценивает резкость лиц, закрытые глаза, смаз и случайные кадры — на этом Mac, без сети. Пока оценки видны только в калибровке брака. Включение подействует при следующем открытии папки: кадры без оценок модели проанализируются заново. " + prompts
+    }
 
     var body: some View {
         let c = theme.c
@@ -93,8 +121,135 @@ struct SettingsView: View {
                 Text("Отбор")
                     .font(theme.headingFont)
                     .foregroundStyle(c.text1)
+                PCCheckbox(isOn: $autoKeepFolder, title: "Папка «Отобранные» по умолчанию")
+                Text("Если не выбрано ни одной папки назначения, клавиша 1 переносит кадры в «Отобранные» внутри исходной папки. Сама папка появляется только при первом переносе. Выключите, если переносить не нужно: кадры можно будет удалять, копировать и сравнивать.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(c.text3)
+                    .fixedSize(horizontal: false, vertical: true)
                 PCCheckbox(isOn: $pairRawJpeg, title: "Объединять RAW и JPEG одного кадра")
                 Text("Файлы с одинаковым именем в одной папке (DSC_0452.NEF и DSC_0452.JPG) показываются одной карточкой и переносятся, удаляются и возвращаются вместе. Изменение применится при следующем запуске просмотра.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(c.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Rectangle().fill(c.line).frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Умный отбор")
+                    .font(theme.headingFont)
+                    .foregroundStyle(c.text1)
+                PCCheckbox(isOn: $smartAnalysis, title: "Анализировать фото при открытии папки")
+                Text("Без анализа в сетке нет разделов «Брак» и «Серии». Анализ идёт в фоне и не мешает отбору; второй раз папка открывается мгновенно — результаты сохраняются в кэше. Изменение применится при следующем запуске просмотра.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(c.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 12) {
+                    Text("Строгость")
+                        .font(theme.bodyFont)
+                        .foregroundStyle(c.text2)
+                    Picker("Строгость", selection: $analysisStore.strictness) {
+                        ForEach(DefectStrictness.allCases) { level in
+                            Text(level.title).tag(level)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    Spacer(minLength: 0)
+                }
+                Text("Мягко — только явный брак. Строго — больше кадров на проверку, но чаще ошибается. Меняется сразу, без повторного анализа. В «Брак» попадают: размытые кадры, закрытые глаза, пересвет, темнота (в том числе лица в тени), завал горизонта (только при «Строго»), случайные кадры.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(c.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+                PCCheckbox(isOn: $defectAutoZoom, title: "Открывать брак сразу на проблемном месте")
+                Text("Кадр из «Брака» с размытием или закрытыми глазами открывается в 100 % на глазах или главном объекте — так проверяют фокус. Двойной клик — вписать в экран.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(c.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 24)
+                HStack(spacing: 12) {
+                    Text("Серия — кадры с интервалом до")
+                        .font(theme.bodyFont)
+                        .foregroundStyle(c.text2)
+                    Picker("Интервал серии", selection: $seriesGap) {
+                        Text("1 с").tag(1.0)
+                        Text("3 с").tag(3.0)
+                        Text("10 с").tag(10.0)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    Spacer(minLength: 0)
+                }
+                .onChange(of: seriesGap) { _, _ in
+                    AnalysisStore.shared.seriesSettingsChanged()
+                }
+                Text("1 с — только серийная съёмка, 10 с — ещё и несколько дублей одной сцены. Кадры серии должны быть и похожими друг на друга. Меняется сразу.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(c.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+                PCCheckbox(isOn: $peopleEnabled, title: "Искать людей (раздел «Люди»)")
+                HStack(spacing: 12) {
+                    Text("Похожесть лиц")
+                        .font(theme.bodyFont)
+                        .foregroundStyle(c.text2)
+                    Picker("Похожесть лиц", selection: $peopleDistance) {
+                        Text("Строго").tag(0.6)
+                        Text("Обычно").tag(0.75)
+                        Text("Свободно").tag(0.9)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 24)
+                .disabled(!peopleEnabled)
+                .opacity(peopleEnabled ? 1 : 0.45)
+                .onChange(of: peopleDistance) { _, _ in
+                    AnalysisStore.shared.peopleSettingsChanged()
+                }
+                Text(peopleNote)
+                    .font(.system(size: 11))
+                    .foregroundStyle(c.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 24)
+                PCCheckbox(isOn: $qualityModelEnabled, title: "Модель MobileCLIP")
+                    .disabled(!QualityModel.isBundled)
+                Text(qualityModelNote)
+                    .font(.system(size: 11))
+                    .foregroundStyle(c.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 24)
+                if let summary = analysisStore.lastRunSummary {
+                    Text(summary)
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(c.text2)
+                }
+                Button {
+                    AnalysisStore.shared.clearCache()
+                    cacheSize = AnalysisCache.size()
+                } label: {
+                    Text("Очистить кэш анализа (\(ByteCountFormatter.string(fromByteCount: cacheSize, countStyle: .file)))")
+                }
+                .buttonStyle(PCButtonStyle())
+                .disabled(cacheSize == 0)
+                Text("Анализ выполняется на этом Mac и никуда не отправляется. Файлы не изменяются, рядом с фото ничего не записывается.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(c.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .onAppear { cacheSize = AnalysisCache.size() }
+
+            Rectangle().fill(c.line).frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Звёзды и цвета")
+                    .font(theme.headingFont)
+                    .foregroundStyle(c.text1)
+                PCCheckbox(isOn: $marksEnabled, title: "Звёзды и цветовые метки")
+                Text("⌥1–⌥5 — звёзды, ⌃1–⌃8 — цвет, ⌥0 и ⌃0 снимают. В сетке — выделенным кадрам. Звёзды и цвет можно ставить и кликом: под миниатюрой при наведении, в просмотре и в сравнении — рядом с именем файла. Фильтр по звёздам и цвету — кнопка над сеткой. Оценки хранятся в приложении и переезжают вместе с кадром; в XMP рядом с фото (DSCF0001.xmp — его читают Lightroom, Bridge и Capture One) записываются только командой «Записать в XMP». Сами снимки не меняются. Если ⌃1–⌃8 не срабатывают, они заняты переключением рабочих столов: Системные настройки → Клавиатура → Сочетания клавиш → Mission Control.")
                     .font(.system(size: 11))
                     .foregroundStyle(c.text3)
                     .fixedSize(horizontal: false, vertical: true)

@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import ImageIO
-import UniformTypeIdentifiers
+import UniformTypeIdentifiers   
 
 // MARK: - Модель
 

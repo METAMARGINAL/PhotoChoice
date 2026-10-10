@@ -12,6 +12,8 @@
 
 ### Features
 
+- **Smart culling** (in development): photos are analyzed in the background on this Mac (nothing is uploaded, files are never changed) and the grid gets three more sections. **Rejects** (`⌘2`) — blurry or out-of-focus shots (checked at 100 % around the eyes or the main subject), softer than their burst neighbors, closed eyes, blown highlights, too dark, tilted horizon, accidental shots; a small mark in "All photos" shows the reason. **Bursts** (`⌘3`) — shots taken in a row that look alike (and have the same faces), each with a header and the best shot marked: sharpest, with everyone's eyes open. **People** (`⌘4`) — faces that appear in several shots, grouped into people with the AuraFace recognition model (face vectors stay in the analysis cache on this Mac). Strictness, burst interval and "open rejects at the problem spot at 100 %" are in Settings. The **Reject calibration** panel (`⌥⌘K`) shows every photo on each metric's scale, lets you move thresholds, label shots as reject / good and train a small model on your labels. Apple's MobileCLIP model double-checks "Blurry": a shot stays in Rejects only if the model also sees it as out of focus; its other scores are shown in the calibration panel. Both models are in the repository (see below).
+- **Stars and color labels** (off by default, Settings → "Stars and colors"): `⌥1`–`⌥5` set stars, `⌃1`–`⌃8` set a color label, `⌥0` / `⌃0` clear them; in the grid they apply to the selection. You can also click the stars and the color dot under a thumbnail (on hover), in the viewer and in compare mode. Filter the grid by stars and colors with the button above it. Marks are stored in the app and follow a photo when it is moved. "Write to XMP" saves them to a sidecar next to the photo (`DSCF0001.xmp`: `xmp:Rating`, `xmp:Label`) without touching the photo; an existing sidecar keeps everything else and moves together with its photo.
 - **Grid of all photos** (new in 1.1): thumbnails with file name, size, resolution and camera model. Adjust thumbnail size with the slider, pinch, or `+` / `−` / `0`. Sorting keys work right in the grid.
 - **Compare two shots** (new in 1.3, key `C`): reference (A) on the left, candidate (B) on the right, synced zoom and pan, swap sides, promote the candidate to reference, sort the active side with `1`–`9` / `Delete`.
 - **Color palette** (new in 1.3): about 10 main colors of the photo in the info panel (k-means in OKLab, works from the embedded preview, so RAW is fast).
@@ -43,6 +45,8 @@ Everywhere:
 | `F` | Switch between grid and single photo |
 | `I` | Show / hide photo info |
 | `C` | Compare mode on / off |
+| `⌥1`–`⌥5` / `⌥0` | Stars / clear stars (when enabled in Settings) |
+| `⌃1`–`⌃8` / `⌃0` | Color label / clear label (when enabled in Settings) |
 | `⌘,` | Settings |
 | `⌘R` | Start review |
 
@@ -54,7 +58,10 @@ Grid:
 | `Home` / `End` | First / last photo |
 | `Return` / double-click | Open photo |
 | `+` / `−` / `0` | Bigger / smaller / default thumbnails |
-| `Esc` | Exit review |
+| `⌘1` / `⌘2` / `⌘3` / `⌘4` | All photos / Rejects / Bursts / People |
+| `↑` / `↓` in Bursts | Previous / next burst |
+| `⌥⌘K` | Reject calibration panel |
+| `Esc` | Clear selection / close the opened burst or person / exit review |
 
 Single photo:
 
@@ -90,11 +97,32 @@ Compare:
 
 ### Build
 
-1. Clone the repository.
-2. Open `PhotoChoice.xcodeproj` in Xcode.
-3. Choose your signing team and press `⌘R`.
+1. Install Git LFS before cloning: `brew install git-lfs && git lfs install`. The Core ML models (≈330 MB) are stored in LFS; without it you get small pointer files instead of models and the app runs without them.
+2. Clone the repository.
+3. Open `PhotoChoice.xcodeproj` in Xcode.
+4. Choose your signing team and press `⌘R`.
 
 The app runs in the App Sandbox. It only accesses the folders you pick.
+
+### MobileCLIP model
+
+Smart culling uses Apple's MobileCLIP-S2 (Core ML): the image encoder (≈70 MB) in every build, the text encoder (≈130 MB) only in Debug. Both are already in `PhotoChoice/Models/` (Git LFS); the app also works without them. To download them again:
+
+1. Install the Hugging Face CLI: `brew install hf`.
+2. Download the S2 packages: `hf download apple/coreml-mobileclip --include "mobileclip_s2_*" --local-dir ~/Downloads/mobileclip`.
+3. Move both packages into `PhotoChoice/Models/` and build. The text encoder (`mobileclip_s2_text.mlpackage`, ≈130 MB) goes only into Debug builds: Release excludes it (`EXCLUDED_SOURCE_FILE_NAMES`).
+4. Prompts are computed automatically when a folder is opened (Debug). To ship them with Release, save `prompts.json` from Reject calibration (`⌥⌘K`) → "MobileCLIP" into `PhotoChoice/Models/`.
+5. Models go to Git through Git LFS (`.gitattributes`): run `brew install git-lfs && git lfs install` before `git add`.
+
+The Core ML weights were published under the Apple Sample Code License (text in `PhotoChoice/Models/LICENSE-MobileCLIP.txt`). Newer releases (MobileCLIP2) use a research-only license, so don't swap them in.
+
+### Face recognition model
+
+The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style ResNet-100, Core ML fp16, ≈124 MB). It is already in `PhotoChoice/Models/` (Git LFS); without it, faces are compared with a generic Vision image descriptor, which mixes people up more often. To download it again:
+
+1. Download: `hf download TechnoThinker/visuals-models-open --local-dir ~/Downloads/auraface`.
+2. Move `auraface_v1.mlpackage` into `PhotoChoice/Models/` and copy `LICENSE.md` there as `LICENSE-AuraFace.md`. Build.
+3. Folders are analyzed again on the next open, then People uses the new face vectors.
 
 ---
 
@@ -106,6 +134,8 @@ The app runs in the App Sandbox. It only accesses the folders you pick.
 
 ### Возможности
 
+- **Умный отбор** (в разработке): фото анализируются в фоне на этом Mac (ничего не отправляется, файлы не меняются), и в сетке появляются ещё три раздела. **Брак** (`⌘2`) — размытые кадры и промахи фокуса (проверяется в 100 % на глазах или главном объекте), кадры мягче соседей по серии, закрытые глаза, пересвет, темнота, завал горизонта, случайные кадры; в «Все фото» на таких кадрах маленький значок с причиной. **Серии** (`⌘3`) — кадры, снятые подряд и похожие друг на друга (в том числе по лицам), с заголовками и отметкой лучшего кадра: самый резкий, у всех открыты глаза. **Люди** (`⌘4`) — лица, которые встречаются на нескольких кадрах, собранные в людей моделью распознавания AuraFace (векторы лиц хранятся только в кэше анализа на этом Mac). Строгость, интервал серии и «открывать брак сразу в 100 % на проблемном месте» — в настройках. Панель **«Калибровка брака»** (`⌥⌘K`) показывает все кадры на шкале каждой метрики, позволяет двигать пороги, размечать кадры как «брак» и «норма» и обучить по этой разметке небольшую модель. Модель MobileCLIP от Apple перепроверяет «Размыто»: кадр остаётся в браке, только если и она видит, что он не в фокусе; остальные её оценки показываются в калибровке. Обе модели лежат в репозитории (см. ниже).
+- **Звёзды и цветовые метки** (по умолчанию выключены, Настройки → «Звёзды и цвета»): `⌥1`–`⌥5` ставят звёзды, `⌃1`–`⌃8` — цвет, `⌥0` / `⌃0` снимают; в сетке — выделенным кадрам. Звёзды и кружок цвета можно и кликнуть: под миниатюрой при наведении, в просмотре и в сравнении. Фильтр по звёздам и цвету — кнопка над сеткой. Оценки хранятся в приложении и переезжают вместе с кадром. «Записать в XMP» сохраняет их в файл рядом с фото (`DSCF0001.xmp`: `xmp:Rating`, `xmp:Label`), сам снимок не меняется; в существующем XMP остальное остаётся, и он переносится вместе с кадром.
 - **Сетка всех фото** (новое в 1.1): миниатюры с именем файла, размером, разрешением и моделью камеры. Размер миниатюр меняется слайдером, щипком или клавишами `+` / `−` / `0`. Клавиши отбора работают прямо в сетке.
 - **Сравнение двух кадров** (новое в 1.3, клавиша `C`): слева эталон (A), справа кандидат (B), синхронные масштаб и перемещение, обмен сторон, кандидат одной клавишей становится эталоном, активную сторону можно отбирать клавишами `1`–`9` / `Delete`.
 - **Палитра кадра** (новое в 1.3): около 10 основных цветов снимка в панели сведений (k-means в OKLab, считается по встроенному превью, поэтому быстро и для RAW).
@@ -137,6 +167,8 @@ The app runs in the App Sandbox. It only accesses the folders you pick.
 | `F` | Переключиться между сеткой и одним фото |
 | `I` | Показать / скрыть сведения о снимке |
 | `C` | Включить / выключить сравнение |
+| `⌥1`–`⌥5` / `⌥0` | Звёзды / снять звёзды (если включено в настройках) |
+| `⌃1`–`⌃8` / `⌃0` | Цветовая метка / снять метку (если включено в настройках) |
 | `⌘,` | Настройки |
 | `⌘R` | Начать просмотр |
 
@@ -148,7 +180,10 @@ The app runs in the App Sandbox. It only accesses the folders you pick.
 | `Home` / `End` | Первое / последнее фото |
 | `Return` / двойной клик | Открыть фото |
 | `+` / `−` / `0` | Крупнее / мельче / стандартный размер миниатюр |
-| `Esc` | Выйти из просмотра |
+| `⌘1` / `⌘2` / `⌘3` / `⌘4` | Все фото / Брак / Серии / Люди |
+| `↑` / `↓` в «Сериях» | Предыдущая / следующая серия |
+| `⌥⌘K` | Панель «Калибровка брака» |
+| `Esc` | Снять выделение / закрыть открытую серию или человека / выйти из просмотра |
 
 В просмотре одного фото:
 
@@ -184,8 +219,29 @@ The app runs in the App Sandbox. It only accesses the folders you pick.
 
 ### Сборка
 
-1. Склонируйте репозиторий.
-2. Откройте `PhotoChoice.xcodeproj` в Xcode.
-3. Выберите команду для подписи и нажмите `⌘R`.
+1. До клонирования поставьте Git LFS: `brew install git-lfs && git lfs install`. Модели Core ML (≈330 МБ) хранятся в LFS; без него вместо моделей скачаются маленькие файлы-ссылки, и приложение будет работать без моделей.
+2. Склонируйте репозиторий.
+3. Откройте `PhotoChoice.xcodeproj` в Xcode.
+4. Выберите команду для подписи и нажмите `⌘R`.
 
 Приложение работает в песочнице (App Sandbox) и имеет доступ только к тем папкам, которые вы выбрали.
+
+### Модель MobileCLIP
+
+Умный отбор использует MobileCLIP-S2 от Apple (Core ML): кодировщик картинок (≈70 МБ) — в любой сборке, текстовую часть (≈130 МБ) — только в Debug. Обе уже лежат в `PhotoChoice/Models/` (Git LFS); без них приложение тоже работает. Скачать заново:
+
+1. Установите Hugging Face CLI: `brew install hf`.
+2. Скачайте пакеты S2: `hf download apple/coreml-mobileclip --include "mobileclip_s2_*" --local-dir ~/Downloads/mobileclip`.
+3. Перенесите оба пакета в `PhotoChoice/Models/` и соберите проект. Текстовая часть (`mobileclip_s2_text.mlpackage`, ≈130 МБ) попадает только в сборку Debug: из Release её исключает `EXCLUDED_SOURCE_FILE_NAMES`.
+4. Подсказки считаются сами при открытии папки (в Debug). Чтобы они были в Release, сохраните `prompts.json` из «Калибровка брака» (`⌥⌘K`) → «Модель MobileCLIP» в `PhotoChoice/Models/`.
+5. Модели идут в гит через Git LFS (`.gitattributes`): до `git add` выполните `brew install git-lfs && git lfs install`.
+
+Веса Core ML опубликованы под Apple Sample Code License (текст — `PhotoChoice/Models/LICENSE-MobileCLIP.txt`). Новые версии (MobileCLIP2) выходят под лицензией только для исследований — их не подставляйте.
+
+### Модель распознавания лиц
+
+Раздел «Люди» собирает лица моделью AuraFace-v1 (fal, Apache-2.0, ResNet-100 по схеме ArcFace, Core ML fp16, ≈124 МБ). Она уже лежит в `PhotoChoice/Models/` (Git LFS); без неё лица сравниваются по общему описанию картинки от Vision, и люди путаются чаще. Скачать заново:
+
+1. Скачайте: `hf download TechnoThinker/visuals-models-open --local-dir ~/Downloads/auraface`.
+2. Перенесите `auraface_v1.mlpackage` в `PhotoChoice/Models/`, туда же скопируйте `LICENSE.md` под именем `LICENSE-AuraFace.md`. Соберите проект.
+3. При следующем открытии папки кадры проанализируются заново, и «Люди» перейдут на новые векторы лиц.

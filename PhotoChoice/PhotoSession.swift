@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import Observation
 import UniformTypeIdentifiers
@@ -20,7 +21,8 @@ struct Destination: Identifiable, Hashable {
 struct HistoryEntry {
     let originalURL: URL
     let currentURL: URL
-    let indexBefore: Int
+    /// Позиция кадра в полном списке папки (`allPhotos`) до переноса
+    let allIndexBefore: Int
     /// Остальные файлы кадра (пара RAW + JPEG): откуда → куда
     var companionMoves: [(original: URL, current: URL)] = []
 }
@@ -36,6 +38,56 @@ struct Toast: Equatable {
     var key: String?
     var text: String
     var kind: ToastKind
+}
+
+/// Раздел сетки (умный отбор, docs/SmartCulling.md). Раздел — только отфильтрованный список кадров:
+/// действия внутри него те же, что везде (1–9, Delete, Z…)
+enum PhotoSection: Equatable {
+    case all
+    case defects
+    case series
+    case people
+
+    var title: String {
+        switch self {
+        case .all: "Все фото"
+        case .defects: "Брак"
+        case .series: "Серии"
+        case .people: "Люди"
+        }
+    }
+}
+
+/// Человек в разделе «Люди»: его кадры по порядку съёмки и лицо для плитки
+struct PersonGroup: Identifiable {
+    /// Номер по числу кадров (с 1)
+    let number: Int
+    let photos: [URL]
+    /// Кадр и прямоугольник лица (в долях кадра, сверху слева) для плитки
+    let coverURL: URL
+    let coverRect: CGRect
+    /// Лица этого человека — по ним он узнаётся после перегруппировки (кадры у людей общие, лица — нет)
+    let faces: Set<FaceRef>
+
+    /// Не обложка: у двух людей она может быть из одного кадра, и плитки с одинаковым id пропадали
+    var id: Int { number }
+}
+
+/// Серия в сетке: её кадры, лучший кадр и место в списке раздела
+struct SeriesBlock: Identifiable {
+    /// Номер серии по порядку съёмки (с 1)
+    let number: Int
+    let members: [URL]
+    let best: URL?
+    /// Почему выбран лучший — для подсказки
+    let bestNote: String
+    let start: Date?
+    /// От первого до последнего кадра, секунды
+    let duration: TimeInterval
+    /// Позиции кадров в `PhotoSession.photos`
+    var range: Range<Int>
+
+    var id: URL { members[0] }
 }
 
 enum ViewMode {
@@ -56,13 +108,20 @@ final class PhotoSession {
 
     var sourceURL: URL?
     var destinations: [Destination] = []
-    var photos: [URL] = []
+    /// Все кадры папки в исходном порядке. Меняют его только сканирование, перенос/корзина и отмена
+    private(set) var allPhotos: [URL] = []
+    /// Кадры текущего раздела — их показывают сетка, просмотр и сравнение; `index` указывает сюда.
+    /// Пересобирается через `rebuildVisible`
+    private(set) var photos: [URL] = []
+    private(set) var section: PhotoSection = .all
     var index: Int = 0
     var includeSubfolders = false
     var isViewing = false
     var viewMode: ViewMode = .grid
     /// Панель сведений о снимке (клавиша I)
     var showInfo = false
+    /// Панель «Калибровка брака» в сетке (⌥⌘K)
+    var showCalibration = false
 
     // Сравнение (клавиша C): слева эталон (A), справа кандидат (B).
     // Активная сторона — та, к которой применяются стрелки, 1–9, Delete, Z; currentPhoto = её фото
@@ -154,31 +213,333 @@ final class PhotoSession {
         refreshSourceSummary()
     }
 
+    // MARK: - Разделы
+
+    /// Умный отбор: разделы показываются (этап 1 — есть анализ; правила брака и серии — этапы 2 и 3)
+    static let smartCullingReady = true
+
+    /// Анализировать фото при открытии папки (настройка «Умный отбор», по умолчанию вкл.)
+    var analysisEnabled: Bool {
+        UserDefaults.standard.object(forKey: "smartAnalysis") as? Bool ?? true
+    }
+
+    /// Показывать переключатель разделов (анализ включён в настройках и готов)
+    var sectionsAvailable: Bool {
+        Self.smartCullingReady && analysisEnabled
+    }
+
+    func showSection(_ newSection: PhotoSection) {
+        guard newSection != section, newSection == .all || sectionsAvailable else { return }
+        section = newSection
+        openedSeries = nil
+        openedPerson = nil
+        // Текущим остаётся прежний кадр, если он есть в новом разделе, иначе — первый
+        rebuildVisible(keeping: currentPhoto, fallbackIndex: 0)
+        prefetchAroundCurrent()
+    }
+
+    /// Кадры раздела с фильтром по звёздам и цвету (серии не фильтруются: их кадры идут блоками)
+    private func visiblePhotos(for section: PhotoSection) -> [URL] {
+        let list = sectionPhotos(section)
+        guard section != .series, MarkStore.isEnabled, markFilter.isActive else { return list }
+        let marks = MarkStore.shared
+        return list.filter { markFilter.matches(marks.mark($0)) }
+    }
+
+    /// Кадры раздела из полного списка
+    private func sectionPhotos(_ section: PhotoSection) -> [URL] {
+        switch section {
+        case .all:
+            return allPhotos
+        case .defects:
+            return defectPhotos
+        case .series:
+            if let opened = openedSeriesBlock {
+                return opened.members
+            }
+            return seriesPhotos
+        case .people:
+            // Пока человек не выбран, сетка показывает плитки людей, а не кадры
+            return openedPersonGroup?.photos ?? []
+        }
+    }
+
+    // MARK: Звёзды и цвета
+
+    /// Фильтр сетки по звёздам и цвету (виден, когда функция включена в настройках)
+    var markFilter = MarkFilter() {
+        didSet {
+            guard markFilter != oldValue else { return }
+            rebuildVisible(keeping: currentPhoto, fallbackIndex: 0)
+        }
+    }
+
+    /// Звёзды или цвет для `urls` (по умолчанию — текущий кадр)
+    func applyMark(_ command: MarkCommand, to urls: [URL]? = nil) {
+        guard MarkStore.isEnabled else { return }
+        let targets = urls ?? currentPhoto.map { [$0] } ?? []
+        guard !targets.isEmpty else { return }
+        switch command {
+        case .rating(let n): MarkStore.shared.setRating(targets, n)
+        case .color(let n): MarkStore.shared.setColor(targets, n)
+        }
+        let suffix = targets.count > 1 ? " · \(targets.count) \(Self.plural(targets.count, "кадр", "кадра", "кадров"))" : ""
+        flash(command.text + suffix, key: command.key, kind: .done)
+        // Кадр перестал подходить под фильтр — уходит из сетки, текущим становится следующий
+        if markFilter.isActive {
+            rebuildVisible(keeping: currentPhoto, fallbackIndex: index)
+        }
+    }
+
+    /// Записать звёзды и цвета кадров папки в XMP рядом с ними
+    func exportMarks(_ urls: [URL]? = nil) {
+        let targets = urls ?? allPhotos
+        flash("Записываю XMP…")
+        Task {
+            let result = await MarkStore.shared.exportXMP(targets)
+            if result.failed > 0 {
+                flash("Не удалось записать \(result.failed) XMP — эти файлы не тронуты", kind: .error)
+            } else if result.written == 0 {
+                flash("Нет звёзд и цветов для записи")
+            } else {
+                flash("XMP: \(result.written) \(Self.plural(result.written, "файл", "файла", "файлов"))", kind: .done)
+            }
+        }
+    }
+
+    /// XMP кадра (`DSCF0001.xmp`) едет вместе с ним. Если пары не объединяются и у RAW и JPEG он общий —
+    /// остаётся, пока в папке есть второй файл
+    private func sidecars(of photo: URL) -> [URL] {
+        let sidecar = XMPSidecar.url(for: photo)
+        guard FileManager.default.fileExists(atPath: sidecar.path) else { return [] }
+        let base = photo.deletingPathExtension().path.lowercased()
+        let shared = allPhotos.contains { $0 != photo && $0.deletingPathExtension().path.lowercased() == base }
+        return shared ? [] : [sidecar]
+    }
+
+    // MARK: Люди
+
+    /// Люди папки (кадры ещё в папке, ≥ 2 кадров)
+    private(set) var peopleGroups: [PersonGroup] = []
+    /// Открытый человек: хранятся его лица — номер меняется при перегруппировке.
+    /// По кадрам искать нельзя: групповой кадр есть у нескольких людей, и открывался другой человек
+    private(set) var openedPerson: Set<FaceRef>?
+
+    private var openedPersonGroup: PersonGroup? {
+        guard let openedPerson else { return nil }
+        return peopleGroups.max { a, b in
+            openedPerson.intersection(a.faces).count < openedPerson.intersection(b.faces).count
+        }.flatMap { openedPerson.isDisjoint(with: $0.faces) ? nil : $0 }
+    }
+
+    var isPersonOpened: Bool { section == .people && openedPersonGroup != nil }
+
+    /// Открытый человек — для заголовка над сеткой
+    var currentPerson: PersonGroup? { section == .people ? openedPersonGroup : nil }
+
+    func openPerson(_ person: PersonGroup) {
+        guard section == .people else { return }
+        openedPerson = person.faces
+        rebuildVisible(keeping: nil, fallbackIndex: 0)
+        prefetchAroundCurrent()
+    }
+
+    func closePerson() {
+        guard openedPerson != nil else { return }
+        openedPerson = nil
+        rebuildVisible(keeping: nil, fallbackIndex: 0)
+    }
+
+    private func refreshPeople() {
+        let store = AnalysisStore.shared
+        let present = Set(allPhotos)
+        var groups: [PersonGroup] = []
+        for cluster in store.people {
+            let photos = cluster.photos.filter { present.contains($0) }
+            guard photos.count >= 2 else { continue }
+            let ordered = photos.enumerated().sorted { a, b in
+                let da = store.metrics(for: a.element)?.captureDate
+                let db = store.metrics(for: b.element)?.captureDate
+                if let da, let db, da != db { return da < db }
+                return a.offset < b.offset
+            }.map(\.element)
+            // Лицо для плитки: обложка группы, если её кадр ещё в папке, иначе первое лицо из оставшихся
+            let cover = cluster.faces.first { $0 == cluster.cover && present.contains($0.url) }
+                ?? cluster.faces.first { present.contains($0.url) }
+            guard let cover, let rect = store.metrics(for: cover.url)?.faces[safe: cover.index]?.rect else { continue }
+            groups.append(PersonGroup(number: groups.count + 1, photos: ordered, coverURL: cover.url, coverRect: rect,
+                                      faces: Set(cluster.faces.filter { present.contains($0.url) })))
+        }
+        peopleGroups = groups
+        if openedPerson != nil && openedPersonGroup == nil {
+            openedPerson = nil
+        }
+    }
+
+    /// Кадры с пометками при текущей строгости — по порядку съёмки
+    private(set) var defectPhotos: [URL] = []
+    /// Кадры серий подряд, серия за серией (пока без заголовков в сетке)
+    private(set) var seriesPhotos: [URL] = []
+    private(set) var seriesCount = 0
+    /// Все серии папки (кадры ещё в папке, ≥ 2), с лучшим кадром
+    private(set) var allSeries: [SeriesBlock] = []
+    /// Открытая серия: в сетке только её кадры. Хранятся кадры серии — номер меняется, когда кадры уходят
+    private(set) var openedSeries: Set<URL>?
+
+    private var openedSeriesBlock: SeriesBlock? {
+        guard let openedSeries else { return nil }
+        return allSeries.first { !openedSeries.isDisjoint(with: $0.members) }
+    }
+
+    var isSeriesOpened: Bool { section == .series && openedSeriesBlock != nil }
+
+    /// Серии, как они видны в сетке сейчас: все или одна открытая; `range` — позиции в `photos`
+    var visibleSeries: [SeriesBlock] {
+        guard section == .series else { return [] }
+        if var opened = openedSeriesBlock {
+            opened.range = 0..<opened.members.count
+            return [opened]
+        }
+        return allSeries
+    }
+
+    /// Лучший кадр серии (для отметки в сетке)
+    func seriesBest(_ url: URL) -> SeriesBlock? {
+        guard section == .series else { return nil }
+        return allSeries.first { $0.best == url }
+    }
+
+    /// Открыть серию: в сетке только её кадры (Esc — назад к списку серий)
+    func openSeries(_ block: SeriesBlock) {
+        guard section == .series else { return }
+        openedSeries = Set(block.members)
+        rebuildVisible(keeping: currentPhoto.flatMap { block.members.contains($0) ? $0 : nil } ?? block.best ?? block.members[0],
+                       fallbackIndex: 0)
+    }
+
+    func closeSeries() {
+        guard openedSeries != nil else { return }
+        openedSeries = nil
+        rebuildVisible(keeping: currentPhoto, fallbackIndex: 0)
+    }
+
+    /// ↑/↓ в разделе «Серии»: к предыдущей/следующей серии, на ту же позицию в ней (или на последний кадр)
+    func jumpSeries(_ delta: Int) {
+        let blocks = visibleSeries
+        guard let current = blocks.firstIndex(where: { $0.range.contains(index) }) else { return }
+        let target = current + delta
+        guard blocks.indices.contains(target) else { return }
+        let offset = index - blocks[current].range.lowerBound
+        let destination = blocks[target].range
+        select(min(destination.lowerBound + offset, destination.upperBound - 1))
+    }
+
+    /// Пересобирает список брака; без даты съёмки кадр остаётся на своём месте в общем порядке
+    private func refreshDefects() {
+        let store = AnalysisStore.shared
+        let flagged = allPhotos.enumerated().filter { store.isDefect($0.element) }
+        defectPhotos = flagged.sorted { a, b in
+            let da = store.metrics(for: a.element)?.captureDate
+            let db = store.metrics(for: b.element)?.captureDate
+            if let da, let db, da != db { return da < db }
+            return a.offset < b.offset
+        }.map(\.element)
+
+        // Серии — только из кадров, которые ещё в папке; от серии в 1 кадр ничего не осталось.
+        // Лучший выбирается среди оставшихся: перенесли лучший — лучшим станет следующий
+        let present = Set(allPhotos)
+        let groups = store.series.map { $0.filter { present.contains($0) } }.filter { $0.count >= 2 }
+        var blocks: [SeriesBlock] = []
+        var position = 0
+        for (i, members) in groups.enumerated() {
+            let pick = SeriesGrouping.best(of: members) { store.metrics(for: $0) }
+            let dates = members.compactMap { store.metrics(for: $0)?.captureDate }
+            let start = dates.min()
+            let duration = start.map { (dates.max() ?? $0).timeIntervalSince($0) } ?? 0
+            blocks.append(SeriesBlock(number: i + 1, members: members, best: pick?.url, bestNote: pick?.note ?? "",
+                                      start: start, duration: duration, range: position..<(position + members.count)))
+            position += members.count
+        }
+        allSeries = blocks
+        seriesPhotos = groups.flatMap { $0 }
+        seriesCount = groups.count
+        refreshPeople()
+        // Открытая серия исчезла (в ней остался 1 кадр) — назад к списку
+        if openedSeries != nil && openedSeriesBlock == nil {
+            openedSeries = nil
+        }
+    }
+
+    /// Анализ дописал кадры или сменилась строгость
+    private func analysisChanged() {
+        refreshDefects()
+        if section != .all {
+            rebuildVisible(keeping: currentPhoto, fallbackIndex: index)
+        }
+    }
+
+    /// Пересобирает список раздела. Текущим становится `url`, если он виден, иначе кадр на месте `fallbackIndex`
+    private func rebuildVisible(keeping url: URL?, fallbackIndex: Int) {
+        refreshDefects()
+        photos = visiblePhotos(for: section)
+        if let url, let i = photos.firstIndex(of: url) {
+            index = i
+        } else {
+            index = photos.isEmpty ? 0 : min(max(fallbackIndex, 0), photos.count - 1)
+        }
+        // Раздел опустел, а в папке кадры ещё есть — возвращаемся к сетке (а не к экрану «Готово»)
+        if photos.isEmpty && !allPhotos.isEmpty && viewMode != .grid {
+            isDrawing = false
+            viewMode = .grid
+        }
+    }
+
     func startReview() {
         errorMessage = nil
         guard let sourceURL else {
             errorMessage = "Сначала выберите папку с фото."
             return
         }
+        // Галочку «Отобранные по умолчанию» выключили после выбора папки — убираем её из списка
+        if !Self.autoKeepFolder {
+            let keep = sourceURL.appendingPathComponent("Отобранные", isDirectory: true).standardizedFileURL
+            let before = destinations.count
+            destinations.removeAll { $0.name == "Отобранные" && $0.url.standardizedFileURL == keep }
+            if destinations.count != before { reassignShortcuts() }
+        }
         if destinations.isEmpty {
             ensureKeepFolder()
         }
-        photos = scan(source: sourceURL)
-        index = 0
+        ImageLoader.removeAll()
+        ThumbnailLoader.removeAll()
+        markFilter = MarkFilter()
+        allPhotos = scan(source: sourceURL)
+        section = .all
+        openedSeries = nil
+        openedPerson = nil
+        rebuildVisible(keeping: nil, fallbackIndex: 0)
         history.removeAll()
         movedCount = 0
         trashedCount = 0
-        guard !photos.isEmpty else {
+        guard !allPhotos.isEmpty else {
             errorMessage = "В этой папке нет фотографий."
             return
         }
         viewMode = .grid
         isViewing = true
         WindowChrome.enterFullScreen()
-        prefetchAroundCurrent()
+        // Анализ в фоне, ниже миниатюр по приоритету; готовое берётся из кэша
+        if analysisEnabled {
+            AnalysisStore.shared.onDefectsChanged = { [weak self] in self?.analysisChanged() }
+            AnalysisStore.shared.onFinished = { [weak self] summary in self?.flash(summary, kind: .done) }
+            AnalysisStore.shared.start(photos: allPhotos, source: sourceURL)
+        }
     }
 
     func stopReview() {
+        AnalysisStore.shared.close()
+        ImageLoader.removeAll()
+        ThumbnailLoader.removeAll()
         isDrawing = false
         isViewing = false
         WindowChrome.exitFullScreen()
@@ -194,6 +555,16 @@ final class PhotoSession {
         guard photos.indices.contains(newIndex), newIndex != index else { return }
         index = newIndex
         prefetchAroundCurrent()
+    }
+
+    /// Сделать кадр текущим (клик по точке на графике калибровки). Нет в разделе — переходим во «Все фото»
+    func reveal(_ url: URL) {
+        if let i = photos.firstIndex(of: url) {
+            select(i)
+        } else if allPhotos.contains(url) {
+            showSection(.all)
+            if let i = photos.firstIndex(of: url) { select(i) }
+        }
     }
 
     func open(_ newIndex: Int) {
@@ -218,16 +589,17 @@ final class PhotoSession {
     func moveCurrent(to destination: Destination) {
         guard let photo = currentPhoto else { return }
         let extras = companions(of: photo)
+        let others = extras + sidecars(of: photo)
         do {
             try FileManager.default.createDirectory(at: destination.url, withIntermediateDirectories: true)
             // Имя по метаданным берём у показываемого файла — у всей пары оно общее
             let newBase = renamesOnMove ? MetadataNaming.baseName(for: photo, style: renameStyle) : nil
-            let moved = try moveGroup([photo] + extras, to: destination.url, baseName: newBase)
+            let moved = try moveGroup([photo] + others, to: destination.url, baseName: newBase)
             let text = extras.isEmpty ? destination.name : "\(destination.name) · \(extras.count + 1) файла"
             finishMove(
                 original: photo,
                 current: moved[0],
-                companionMoves: zip(extras, moved.dropFirst()).map { (original: $0.0, current: $0.1) },
+                companionMoves: zip(others, moved.dropFirst()).map { (original: $0.0, current: $0.1) },
                 toast: Toast(key: destination.shortcut, text: text, kind: .move)
             )
             movedCount += 1
@@ -248,7 +620,7 @@ final class PhotoSession {
         guard let photo = currentPhoto else { return }
         var trashed: [(original: URL, current: URL)] = []
         do {
-            for file in [photo] + companions(of: photo) {
+            for file in [photo] + companions(of: photo) + sidecars(of: photo) {
                 var resulting: NSURL?
                 try FileManager.default.trashItem(at: file, resultingItemURL: &resulting)
                 trashed.append((original: file, current: (resulting as URL?) ?? file))
@@ -261,11 +633,12 @@ final class PhotoSession {
             errorMessage = error.localizedDescription
             return
         }
+        let photoCount = trashed.filter { !XMPSidecar.isSidecar($0.original) }.count
         finishMove(
             original: photo,
             current: trashed[0].current,
             companionMoves: Array(trashed.dropFirst()),
-            toast: Toast(key: "⌫", text: trashed.count > 1 ? "В корзину · \(trashed.count) файла" : "В корзину", kind: .trash)
+            toast: Toast(key: "⌫", text: photoCount > 1 ? "В корзину · \(photoCount) файла" : "В корзину", kind: .trash)
         )
         trashedCount += 1
     }
@@ -289,15 +662,19 @@ final class PhotoSession {
                 restored.append(target)
             }
             let restore = restored[0]
-            if restored.count > 1 {
-                companions[restore] = Array(restored.dropFirst())
+            let pair = restored.dropFirst().filter { !XMPSidecar.isSidecar($0) }
+            if !pair.isEmpty {
+                companions[restore] = Array(pair)
             }
             ImageLoader.evict(entry.currentURL)
             moveAnnotations(from: entry.currentURL, to: restore)
-            let insertAt = min(entry.indexBefore, photos.count)
-            photos.insert(restore, at: insertAt)
-            index = insertAt
-            if viewMode == .compare {
+            AnalysisStore.shared.moveRecord(from: entry.currentURL, to: restore)
+            MarkStore.shared.move(from: entry.currentURL, to: restore)
+            let insertAt = min(entry.allIndexBefore, allPhotos.count)
+            allPhotos.insert(restore, at: insertAt)
+            // Кадр возвращается в общий список; в разделе он виден, только если по-прежнему ему подходит
+            rebuildVisible(keeping: restore, fallbackIndex: index)
+            if viewMode == .compare, photos.contains(restore) {
                 // Возвращённый кадр показываем в активной половине
                 setCompareURL(restore, compareActive)
             }
@@ -536,23 +913,27 @@ final class PhotoSession {
         toast result: Toast
     ) {
         let removedIndex = index
+        let allIndex = allPhotos.firstIndex(of: original) ?? allPhotos.count
         history.append(HistoryEntry(
             originalURL: original,
             currentURL: current,
-            indexBefore: removedIndex,
+            allIndexBefore: allIndex,
             companionMoves: companionMoves
         ))
         companions[original] = nil
         ImageLoader.evict(original)
         ThumbnailLoader.evict(original)
         moveAnnotations(from: original, to: current)
-        photos.remove(at: removedIndex)
+        AnalysisStore.shared.moveRecord(from: original, to: current)
+        MarkStore.shared.move(from: original, to: current)
+        // Кадр исчезает из всех разделов; текущим становится следующий в разделе
+        if allPhotos.indices.contains(allIndex) {
+            allPhotos.remove(at: allIndex)
+        }
+        rebuildVisible(keeping: nil, fallbackIndex: removedIndex)
         if photos.isEmpty {
             flash(result.text, key: result.key, kind: result.kind)
             return
-        }
-        if index >= photos.count {
-            index = photos.count - 1
         }
         repairCompare(removed: original, at: removedIndex)
         flash(result.text, key: result.key, kind: result.kind)
@@ -662,10 +1043,16 @@ final class PhotoSession {
         return done.map { $0.to }
     }
 
+    /// Папка «Отобранные» по умолчанию (настройка `autoKeepFolder`, по умолчанию вкл.)
+    static var autoKeepFolder: Bool {
+        UserDefaults.standard.object(forKey: "autoKeepFolder") as? Bool ?? true
+    }
+
+    /// Назначает «Отобранные» внутри исходной папки клавишей 1. На диске папка НЕ создаётся:
+    /// это делает `moveCurrent` при первом переносе, так что без переносов пустой папки не будет
     private func ensureKeepFolder() {
-        guard let sourceURL else { return }
+        guard Self.autoKeepFolder, let sourceURL else { return }
         let keep = sourceURL.appendingPathComponent("Отобранные", isDirectory: true)
-        try? FileManager.default.createDirectory(at: keep, withIntermediateDirectories: true)
         rememberAccess(keep)
         destinations = [Destination(name: "Отобранные", url: keep, shortcut: "1")]
     }
@@ -818,5 +1205,12 @@ enum WindowChrome {
                 window.toggleFullScreen(nil)
             }
         }
+    }
+}
+
+extension Array {
+    /// Элемент по индексу или nil, если индекса нет
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

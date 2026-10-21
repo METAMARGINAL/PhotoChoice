@@ -26,7 +26,7 @@ nonisolated enum ThemeDirection: String, CaseIterable, Identifiable, Sendable {
     var tagline: String {
         switch self {
         case .studio: "Строго и плотно, янтарный акцент"
-        case .glass: "Стеклянные капсулы macOS 26"
+        case .glass: "Стеклянные капсулы (Liquid Glass — на macOS 26)"
         case .quiet: "Только фото и чёрное поле"
         case .contact: "Контактный лист и сейфлайт"
         }

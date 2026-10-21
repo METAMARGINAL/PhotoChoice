@@ -8,11 +8,11 @@
 
 **PhotoChoice** is a small macOS app for fast photo culling. Pick a folder, browse all shots in a grid, open any of them full screen, and sort each one with a single key or swipe: keep it, send it to one of your folders, or move it to the Trash.
 
-**Current version: 1.4** — see [CHANGELOG.md](CHANGELOG.md).
+**Current version: 1.4.1** — see [CHANGELOG.md](CHANGELOG.md).
 
 ### Download
 
-**[Download PhotoChoice.dmg](https://github.com/METAMARGINAL/photochoice/releases/latest/download/PhotoChoice.dmg)** — the latest version, macOS 26.2 or later. Open the DMG and drag PhotoChoice to Applications.
+**[Download PhotoChoice.dmg](https://github.com/METAMARGINAL/photochoice/releases/latest/download/PhotoChoice.dmg)** — the latest version, macOS 15 Sequoia or later (Apple Silicon and Intel). Open the DMG and drag PhotoChoice to Applications.
 
 The app is not notarized by Apple, so the first launch is blocked: open System Settings → Privacy & Security, click "Open Anyway" next to PhotoChoice and confirm. After that it opens normally.
 
@@ -98,7 +98,7 @@ Compare:
 
 ### Requirements
 
-- macOS 26.2 or later
+- macOS 15 or later (the Glass theme uses Liquid Glass on macOS 26 and a frosted background on older systems)
 - Xcode 26 or later to build
 
 ### Build
@@ -138,11 +138,11 @@ The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style
 
 **PhotoChoice** — небольшое приложение для macOS, чтобы быстро отбирать фотографии. Выберите папку, просмотрите все кадры сеткой, откройте любой на весь экран и одной клавишей или свайпом решайте его судьбу: оставить, отправить в одну из своих папок или убрать в корзину.
 
-**Текущая версия: 1.4** — см. [CHANGELOG.md](CHANGELOG.md).
+**Текущая версия: 1.4.1** — см. [CHANGELOG.md](CHANGELOG.md).
 
 ### Скачать
 
-**[Скачать PhotoChoice.dmg](https://github.com/METAMARGINAL/photochoice/releases/latest/download/PhotoChoice.dmg)** — последняя версия, macOS 26.2 или новее. Откройте DMG и перетащите PhotoChoice в «Программы».
+**[Скачать PhotoChoice.dmg](https://github.com/METAMARGINAL/photochoice/releases/latest/download/PhotoChoice.dmg)** — последняя версия, macOS 15 Sequoia или новее (Apple Silicon и Intel). Откройте DMG и перетащите PhotoChoice в «Программы».
 
 Приложение не нотаризовано Apple, поэтому первый запуск macOS заблокирует: откройте Системные настройки → Конфиденциальность и безопасность, нажмите «Всё равно открыть» рядом с PhotoChoice и подтвердите. Дальше оно открывается как обычно.
 
@@ -228,7 +228,7 @@ The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style
 
 ### Требования
 
-- macOS 26.2 или новее
+- macOS 15 или новее (тема «Стекло» на macOS 26 использует Liquid Glass, на старых системах — матовую подложку)
 - Для сборки нужен Xcode 26 или новее
 
 ### Сборка

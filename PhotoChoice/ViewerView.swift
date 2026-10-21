@@ -377,7 +377,7 @@ struct ViewerView: View {
         .frame(height: 28)
         return Group {
             if theme.isGlass {
-                line.glassEffect(.regular, in: .capsule)
+                line.pcGlass(in: .capsule)
             } else {
                 line
                     .background(c.overlay, in: Capsule())
@@ -431,7 +431,7 @@ struct ViewerView: View {
             content()
                 .padding(.horizontal, text ? 16 : 6)
                 .frame(height: 40)
-                .glassEffect(.regular, in: .capsule)
+                .pcGlass(in: .capsule)
         } else {
             content()
         }

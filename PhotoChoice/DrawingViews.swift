@@ -105,7 +105,7 @@ struct DrawToolbar: View {
             content
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .glassEffect(.regular, in: .capsule)
+                .pcGlass(in: .capsule)
                 .padding(.bottom, 16)
         case .quiet:
             content

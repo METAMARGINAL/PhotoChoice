@@ -109,7 +109,7 @@ struct HintBar: View {
             content
                 .padding(.horizontal, 18)
                 .frame(height: theme.hintbarHeight)
-                .glassEffect(.regular, in: .capsule)
+                .pcGlass(in: .capsule)
                 .padding(.bottom, 16)
         case .quiet:
             content
@@ -435,7 +435,7 @@ struct ToastView: View {
         .padding(.leading, 18)
         .padding(.trailing, 26)
         .padding(.vertical, 14)
-        .glassEffect(.regular, in: .capsule)
+        .pcGlass(in: .capsule)
     }
 
     /// «Тишина»: одно слово поверх фото, без подложки
@@ -571,12 +571,22 @@ struct PCSegmented: View {
 // MARK: - Панели
 
 extension View {
+    /// Liquid Glass на macOS 26, на старых системах — матовая подложка
+    @ViewBuilder
+    func pcGlass<S: Shape>(in shape: S) -> some View {
+        if #available(macOS 26, *) {
+            glassEffect(.regular, in: shape)
+        } else {
+            background(.regularMaterial, in: shape)
+        }
+    }
+
     /// Фон плавающей панели: у «Стекла» — Liquid Glass, у остальных — плотная заливка
     @ViewBuilder
     func themedPanel(_ theme: Theme, cornerRadius: CGFloat? = nil) -> some View {
         let radius = cornerRadius ?? theme.rLg
         if theme.isGlass {
-            glassEffect(.regular, in: .rect(cornerRadius: radius))
+            pcGlass(in: .rect(cornerRadius: radius))
         } else {
             background(theme.c.overlay, in: RoundedRectangle(cornerRadius: radius))
                 .overlay(RoundedRectangle(cornerRadius: radius).stroke(theme.c.line, lineWidth: 1))

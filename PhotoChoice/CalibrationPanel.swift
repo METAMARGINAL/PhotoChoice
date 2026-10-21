@@ -380,11 +380,13 @@ struct CalibrationPanel: View {
                         .buttonStyle(PCButtonStyle(kind: .ghost))
                         .disabled(store.isComputingPrompts)
                 }
+                #if DEBUG
                 if store.prompts?.source == .user {
                     Button("Сохранить prompts.json") { exportPrompts() }
                         .buttonStyle(PCButtonStyle(kind: .ghost))
                         .help("Положите файл в PhotoChoice/Models — подсказки войдут в приложение у всех")
                 }
+                #endif
                 if let promptMessage = store.promptMessage {
                     Text(promptMessage)
                         .font(.system(size: 11))
@@ -464,6 +466,7 @@ struct CalibrationPanel: View {
         Task { await store.computePrompts(textModel: url) }
     }
 
+    #if DEBUG
     private func exportPrompts() {
         guard let source = PromptBank.userFile, let data = try? Data(contentsOf: source) else {
             session.flash("Не удалось прочитать prompts.json", kind: .error)
@@ -471,6 +474,7 @@ struct CalibrationPanel: View {
         }
         export(data, name: "prompts", ext: "json")
     }
+    #endif
 
     // MARK: Низ
 
@@ -479,9 +483,11 @@ struct CalibrationPanel: View {
         return VStack(alignment: .leading, spacing: 8) {
             Rectangle().fill(c.line).frame(height: 1)
             HStack(spacing: 8) {
+                #if DEBUG
                 Button("Экспорт CSV") { exportCSV() }
                     .buttonStyle(PCButtonStyle())
                     .help("Метрики, разметка и вердикты по всем кадрам папки — в exports проекта")
+                #endif
                 Button("Сбросить пороги") { store.tuning = .standard }
                     .buttonStyle(PCButtonStyle(kind: .ghost))
                     .disabled(store.tuning == .standard)
@@ -494,13 +500,15 @@ struct CalibrationPanel: View {
         }
     }
 
+    // Выгрузки CSV и prompts.json — только в отладочной сборке: для подбора порогов, пользователю не нужны
+    #if DEBUG
     // MARK: CSV
 
     private func exportCSV() {
         export(Data(csv().utf8), name: session.sourceURL?.lastPathComponent ?? "калибровка", ext: "csv")
     }
 
-    // MARK: Выгрузки (отладка, до релиза убрать)
+    // MARK: Выгрузки
 
     /// Папка `exports` в корне проекта — путь известен при сборке; песочница пускает туда после одного выбора
     private static let projectExports = URL(fileURLWithPath: #filePath)
@@ -599,6 +607,7 @@ struct CalibrationPanel: View {
         }
         return lines.joined(separator: "\n") + "\n"
     }
+    #endif
 }
 
 // MARK: - Оценки модели

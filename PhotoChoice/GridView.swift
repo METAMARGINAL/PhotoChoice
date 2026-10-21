@@ -243,7 +243,7 @@ struct GridView: View {
             content()
                 .padding(.horizontal, text ? 16 : 6)
                 .frame(height: 40)
-                .glassEffect(.regular, in: .capsule)
+                .pcGlass(in: .capsule)
         } else {
             content()
         }

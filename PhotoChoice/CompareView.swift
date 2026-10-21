@@ -302,7 +302,7 @@ struct CompareView: View {
             content()
                 .padding(.horizontal, text ? 16 : 6)
                 .frame(height: 40)
-                .glassEffect(.regular, in: .capsule)
+                .pcGlass(in: .capsule)
         } else {
             content()
         }
@@ -648,7 +648,7 @@ private struct PaneHeader: View {
                     .padding(.leading, 6)
                     .padding(.trailing, 14)
                     .padding(.vertical, 6)
-                    .glassEffect(.regular, in: .capsule)
+                    .pcGlass(in: .capsule)
             } else {
                 content
                     .padding(.horizontal, 6)

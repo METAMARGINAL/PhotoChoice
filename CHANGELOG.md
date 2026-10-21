@@ -1,5 +1,15 @@
 # Changelog / История изменений
 
+## 1.4.1 — 2026-10-21
+
+### English
+- Runs on macOS 15 Sequoia and later (was 26.2); the Glass theme falls back to a frosted background before macOS 26.
+- CSV and prompts.json export in the calibration panel is only in debug builds.
+
+### Русский
+- Работает на macOS 15 Sequoia и новее (было 26.2); тема «Стекло» до macOS 26 — с матовой подложкой вместо Liquid Glass.
+- Выгрузка CSV и prompts.json в панели калибровки — только в отладочной сборке.
+
 ## 1.4 — 2026-10-21
 
 ### English

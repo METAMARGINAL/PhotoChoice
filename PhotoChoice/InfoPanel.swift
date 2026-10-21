@@ -10,6 +10,9 @@ struct InfoPanel: View {
     @State private var details: PhotoDetails?
     /// Блок «Цвета» (палитра кадра) включён
     @AppStorage("paletteEnabled") private var paletteEnabled = true
+    /// Подсветка на кадре в просмотре и сравнении, как в Lightroom: клик по треугольнику на гистограмме
+    @AppStorage("clipShadows") private var clipShadows = false
+    @AppStorage("clipHighlights") private var clipHighlights = false
 
     /// Ширина по умолчанию (у каждой темы своя — `theme.panelWidth`)
     static let width: CGFloat = 300
@@ -146,6 +149,14 @@ struct InfoPanel: View {
             }
             .frame(height: 96)
             .clipShape(shape)
+            .overlay(alignment: .topLeading) {
+                clipToggle($clipShadows, symbol: "arrowtriangle.down.fill", color: c.clipLow,
+                           help: "Показать провалы на кадре синим")
+            }
+            .overlay(alignment: .topTrailing) {
+                clipToggle($clipHighlights, symbol: "arrowtriangle.up.fill", color: c.clipHigh,
+                           help: "Показать пересветы на кадре красным")
+            }
             .overlay {
                 if theme.isQuiet {
                     VStack {
@@ -159,12 +170,47 @@ struct InfoPanel: View {
 
             if let histogram = details?.histogram {
                 HStack {
-                    clipping("Провалы", histogram.shadowsClipped, symbol: "arrowtriangle.down.fill", color: c.clipLow)
+                    Button {
+                        clipShadows.toggle()
+                    } label: {
+                        clipping("Провалы", histogram.shadowsClipped, symbol: "arrowtriangle.down.fill", color: c.clipLow)
+                    }
+                    .buttonStyle(.plain)
+                    .help(clipShadows ? "Скрыть провалы на кадре" : "Показать провалы на кадре синим")
                     Spacer()
-                    clipping("Пересветы", histogram.highlightsClipped, symbol: "arrowtriangle.up.fill", color: c.clipHigh)
+                    Button {
+                        clipHighlights.toggle()
+                    } label: {
+                        clipping("Пересветы", histogram.highlightsClipped, symbol: "arrowtriangle.up.fill", color: c.clipHigh)
+                    }
+                    .buttonStyle(.plain)
+                    .help(clipHighlights ? "Скрыть пересветы на кадре" : "Показать пересветы на кадре красным")
                 }
             }
         }
+    }
+
+    /// Треугольник в углу гистограммы: включает подсветку на кадре; включённый — в рамке своего цвета
+    private func clipToggle(_ isOn: Binding<Bool>, symbol: String, color: Color, help: String) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 8))
+                .foregroundStyle(color)
+                .opacity(isOn.wrappedValue ? 1 : 0.55)
+                .frame(width: 18, height: 18)
+                .background {
+                    if isOn.wrappedValue {
+                        RoundedRectangle(cornerRadius: 4).fill(color.opacity(0.22))
+                        RoundedRectangle(cornerRadius: 4).strokeBorder(color, lineWidth: 1)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(4)
+        .help(isOn.wrappedValue ? "Скрыть подсветку на кадре" : help)
     }
 
     private func clipping(_ title: String, _ share: Double, symbol: String, color: Color) -> some View {

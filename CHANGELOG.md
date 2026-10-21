@@ -1,8 +1,14 @@
 # Changelog / История изменений
 
-## Unreleased — умный отбор / smart culling
+## 1.4 — 2026-10-21
 
 ### English
+- Star filter picks exact counts: only ★★, or any set of counts (and "no stars"), instead of "at least N". The filter is now a panel that stays open while you tick several stars and colors.
+- Stars and colors set right before quitting are no longer lost.
+- `Z` / `⌘Z` also undoes stars and colors, in the same order as moves.
+- Clipping overlay like in Lightroom: click the triangles in the histogram corners (info panel) to show crushed shadows in blue and clipped highlights in red on the photo, in the viewer and in compare mode.
+- People: merging similar groups is done with one matrix multiply instead of rescanning all pairs after every merge — on large folders it took minutes of CPU after the analysis had finished.
+- Rejects open fitted to the screen; zooming to 100 % on the problem spot is now off by default (Settings → "Open rejects at the problem spot").
 - "All photos / Rejects / Bursts" sections in the grid (`⌘1`–`⌘3`), background analysis with an on-disk cache (nothing next to your photos).
 - Rejects: blur and missed focus checked at 100 % around the eyes or the subject, "softer than burst neighbors", closed eyes, highlights, dark faces, tilted horizon, accidental shots; strictness Soft / Normal / Strict; reason mark in "All photos" and in the viewer; rejects open at 100 % on the problem spot (can be turned off).
 - Bursts: grouping by time, image similarity and faces; headers, best shot per burst (sharpness, everyone's eyes open, face quality, exposure), `↑` / `↓` between bursts, open a single burst.
@@ -19,6 +25,12 @@
 - Memory: preview and thumbnail caches are bounded and cleared when another folder is opened; analysis models are unloaded when analysis finishes; analysis runs on up to 3 threads. Analysis results reach the grid once per second instead of per shot. Cache writes are queued, so a slow older write can no longer overwrite a newer one and force re-analysis.
 
 ### Русский
+- Фильтр по звёздам выбирает точное число: только ★★ или любой набор (в том числе «без звёзд»), а не «не меньше N». Фильтр теперь — панель, которая не закрывается, пока отмечаешь несколько звёзд и цветов.
+- Звёзды и цвета, поставленные прямо перед закрытием приложения, больше не теряются.
+- `Z` / `⌘Z` отменяет и звёзды с цветом — в общем порядке с переносами.
+- Подсветка пересветов и провалов, как в Lightroom: клик по треугольникам в углах гистограммы (сведения, I) показывает на кадре провалы синим и выбитые света красным — в просмотре и в сравнении.
+- «Люди»: слияние похожих групп — одним умножением матриц, а не перебором всех пар после каждого слияния: на больших папках это минутами грузило процессор уже после анализа.
+- Брак открывается вписанным в экран; приближение к проблемному месту в 100 % теперь по умолчанию выключено (Настройки → «Открывать брак сразу на проблемном месте»).
 - Разделы «Все фото / Брак / Серии» в сетке (`⌘1`–`⌘3`), анализ в фоне с кэшем на диске (рядом с фото ничего не пишется).
 - Брак: размытость и промах фокуса проверяются в 100 % на глазах или объекте, «мягче соседей по серии», закрытые глаза, пересвет, лица в тени, завал горизонта, случайные кадры; строгость «Мягко / Обычно / Строго»; значок с причиной в «Все фото» и строка причины в просмотре; брак открывается сразу в 100 % на проблемном месте (можно выключить).
 - Серии: по времени, похожести кадров и лицам; заголовки, лучший кадр серии (резкость, у всех открыты глаза, качество лиц, экспозиция), `↑` / `↓` между сериями, открытие одной серии.

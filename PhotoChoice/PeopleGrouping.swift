@@ -123,20 +123,36 @@ nonisolated enum PeopleGrouping {
             groups.removeAll { $0.members.isEmpty }
         }
 
-        // 3. Один человек мог разделиться на две группы (свет, ракурс) — сливаем очень близкие
-        var merged = true
-        while merged {
-            merged = false
-            search: for a in groups.indices {
-                for b in groups.indices where b > a {
-                    guard groups[a].photos.isDisjoint(with: groups[b].photos),
-                          vDSP.dot(groups[a].center, groups[b].center) >= minDot + 0.1 else { continue }
-                    for i in groups[b].members { add(i, to: a) }
-                    groups.remove(at: b)
-                    merged = true
-                    break search
+        // 3. Один человек мог разделиться на две группы (свет, ракурс) — сливаем очень близкие.
+        // Все пары центров — одним умножением матриц, самые близкие сливаются первыми. Раньше после каждого
+        // слияния пары перебирались заново: на тысячах лиц это минуты работы процессора уже после анализа
+        let mergeDot = minDot + 0.1
+        if groups.count > 1 {
+            let n = groups.count
+            let dots = gram(groups.map(\.center))
+            var pairs: [(a: Int, b: Int, dot: Float)] = []
+            for a in 0..<n {
+                for b in (a + 1)..<n where dots[a * n + b] >= mergeDot {
+                    pairs.append((a, b, dots[a * n + b]))
                 }
             }
+            pairs.sort { $0.dot > $1.dot }
+            var owner = Array(0..<n)
+            func root(_ i: Int) -> Int {
+                var i = i
+                while owner[i] != i { i = owner[i] }
+                return i
+            }
+            for pair in pairs {
+                let a = root(pair.a), b = root(pair.b)
+                // Центры после прошлых слияний сдвинулись — проверяем ещё раз
+                guard a != b, groups[a].photos.isDisjoint(with: groups[b].photos),
+                      vDSP.dot(groups[a].center, groups[b].center) >= mergeDot else { continue }
+                for i in groups[b].members { add(i, to: a) }
+                groups[b].members = []
+                owner[b] = a
+            }
+            groups.removeAll { $0.members.isEmpty }
         }
 
         // 4. Слабые лица только присоединяются, с запасом по порогу
@@ -155,6 +171,22 @@ nonisolated enum PeopleGrouping {
     }
 
     // MARK: Помощники
+
+    /// Попарные скалярные произведения векторов одной длины: n × n, построчно
+    private static func gram(_ vectors: [[Float]]) -> [Float] {
+        let n = vectors.count
+        guard let d = vectors.first?.count, d > 0 else { return [] }
+        let rows = vectors.flatMap { $0 }
+        var columns = [Float](repeating: 0, count: n * d)
+        for i in 0..<n {
+            for k in 0..<d {
+                columns[k * n + i] = rows[i * d + k]
+            }
+        }
+        var result = [Float](repeating: 0, count: n * n)
+        vDSP_mmul(rows, 1, columns, 1, &result, 1, vDSP_Length(n), vDSP_Length(n), vDSP_Length(d))
+        return result
+    }
 
     private static func normalized(_ data: Data?) -> [Float]? {
         guard let data, data.count >= MemoryLayout<Float>.size * 16 else { return nil }

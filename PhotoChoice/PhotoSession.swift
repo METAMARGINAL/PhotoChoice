@@ -27,6 +27,12 @@ struct HistoryEntry {
     var companionMoves: [(original: URL, current: URL)] = []
 }
 
+/// Шаг для Z / ⌘Z: перенос кадра или смена звёзд и цвета (что было у кадров до неё)
+enum UndoStep {
+    case move(HistoryEntry)
+    case marks([URL: PhotoMark])
+}
+
 /// Вид подтверждения действия: влияет на цвет и значок
 enum ToastKind {
     case info, move, trash, undo, done, error
@@ -153,7 +159,7 @@ final class PhotoSession {
     var movedCount = 0
     var trashedCount = 0
 
-    private var history: [HistoryEntry] = []
+    private var history: [UndoStep] = []
     /// Пары RAW + JPEG: показываемый файл → остальные файлы того же кадра
     private(set) var companions: [URL: [URL]] = [:]
 
@@ -279,9 +285,15 @@ final class PhotoSession {
         guard MarkStore.isEnabled else { return }
         let targets = urls ?? currentPhoto.map { [$0] } ?? []
         guard !targets.isEmpty else { return }
+        let store = MarkStore.shared
+        let before = Dictionary(targets.map { ($0, store.mark($0)) }, uniquingKeysWith: { first, _ in first })
         switch command {
-        case .rating(let n): MarkStore.shared.setRating(targets, n)
-        case .color(let n): MarkStore.shared.setColor(targets, n)
+        case .rating(let n): store.setRating(targets, n)
+        case .color(let n): store.setColor(targets, n)
+        }
+        // В историю — только если что-то поменялось: повторное ⌥3 не должно съедать Z
+        if before.contains(where: { store.mark($0.key) != $0.value }) {
+            history.append(.marks(before))
         }
         let suffix = targets.count > 1 ? " · \(targets.count) \(Self.plural(targets.count, "кадр", "кадра", "кадров"))" : ""
         flash(command.text + suffix, key: command.key, kind: .done)
@@ -289,6 +301,18 @@ final class PhotoSession {
         if markFilter.isActive {
             rebuildVisible(keeping: currentPhoto, fallbackIndex: index)
         }
+    }
+
+    /// Z после звёзд или цвета: кадрам возвращается прежняя оценка, текущим становится один из них
+    private func undoMarks(_ previous: [URL: PhotoMark]) {
+        MarkStore.shared.restore(previous)
+        let keep = currentPhoto.flatMap { previous[$0] != nil ? $0 : nil } ?? previous.keys.first
+        if markFilter.isActive {
+            rebuildVisible(keeping: keep, fallbackIndex: index)
+        } else if let keep, let i = photos.firstIndex(of: keep) {
+            select(i)
+        }
+        flash("Отмена", key: "Z", kind: .undo)
     }
 
     /// Записать звёзды и цвета кадров папки в XMP рядом с ними
@@ -649,7 +673,15 @@ final class PhotoSession {
             undoDrawing()
             return
         }
-        guard let entry = history.popLast() else { return }
+        guard let step = history.popLast() else { return }
+        let entry: HistoryEntry
+        switch step {
+        case .move(let move):
+            entry = move
+        case .marks(let previous):
+            undoMarks(previous)
+            return
+        }
         do {
             // Все файлы кадра возвращаются под общим именем (если прежнее успели занять — с суффиксом)
             let moves = [(original: entry.originalURL, current: entry.currentURL)] + entry.companionMoves
@@ -914,12 +946,12 @@ final class PhotoSession {
     ) {
         let removedIndex = index
         let allIndex = allPhotos.firstIndex(of: original) ?? allPhotos.count
-        history.append(HistoryEntry(
+        history.append(.move(HistoryEntry(
             originalURL: original,
             currentURL: current,
             allIndexBefore: allIndex,
             companionMoves: companionMoves
-        ))
+        )))
         companions[original] = nil
         ImageLoader.evict(original)
         ThumbnailLoader.evict(original)

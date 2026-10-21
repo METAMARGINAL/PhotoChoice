@@ -11,6 +11,7 @@ struct GridView: View {
     /// Выделенные кадры (⌘A, ⌘‑клик, ⇧‑клик) — для копирования; текущий кадр — session.index
     @State private var selection: Set<URL> = []
     @AppStorage("marksEnabled") private var marksEnabled = false
+    @State private var showMarkFilter = false
 
     private let defaultSize: CGFloat = 230
 
@@ -252,35 +253,11 @@ struct GridView: View {
 
     // MARK: - Звёзды и цвета
 
-    /// Фильтр по звёздам и цвету и запись в XMP
+    /// Кнопка фильтра; панель не закрывается после каждого выбора — можно отметить несколько звёзд и цветов
     private var markFilterMenu: some View {
         let filter = session.markFilter
-        return Menu {
-            Section("Звёзд не меньше") {
-                ForEach(0...5, id: \.self) { n in
-                    Toggle(n == 0 ? "Любые" : String(repeating: "★", count: n), isOn: Binding(
-                        get: { filter.minRating == n },
-                        set: { _ in session.markFilter.minRating = n }
-                    ))
-                }
-            }
-            Section("Цвет") {
-                Toggle("Без цвета", isOn: colorBinding(0))
-                ForEach(ColorClass.allCases) { color in
-                    Toggle(isOn: colorBinding(color.rawValue)) {
-                        Label { Text(color.title) } icon: { Image(nsImage: color.menuDot) }
-                    }
-                }
-            }
-            Divider()
-            Button("Сбросить фильтр") {
-                session.markFilter = MarkFilter()
-            }
-            .disabled(!filter.isActive)
-            Divider()
-            Button("Записать звёзды и цвета в XMP") {
-                session.exportMarks()
-            }
+        return Button {
+            showMarkFilter.toggle()
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: filter.isActive
@@ -289,25 +266,14 @@ struct GridView: View {
             }
             .foregroundStyle(filter.isActive ? theme.c.accent : theme.c.text2)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
         .fixedSize()
         .help(session.section == .series
               ? "Фильтр по звёздам и цвету — в «Все фото», «Браке» и «Людях»; серии показываются целиком"
               : "Фильтр по звёздам и цвету")
-    }
-
-    private func colorBinding(_ color: Int) -> Binding<Bool> {
-        Binding(
-            get: { session.markFilter.colors.contains(color) },
-            set: { on in
-                if on {
-                    session.markFilter.colors.insert(color)
-                } else {
-                    session.markFilter.colors.remove(color)
-                }
-            }
-        )
+        .popover(isPresented: $showMarkFilter, arrowEdge: .bottom) {
+            MarkFilterPanel(session: session)
+        }
     }
 
     // MARK: - Разделы
@@ -1342,5 +1308,110 @@ struct FaceThumb: View {
         let square = CGRect(x: x, y: y, width: side, height: side).integral
         guard square.width >= 4, square.height >= 4, let cropped = image.cropping(to: square) else { return nil }
         return NSImage(cgImage: cropped, size: NSSize(width: cropped.width, height: cropped.height))
+    }
+}
+
+// MARK: - Фильтр по звёздам и цвету
+
+/// Тот же список, что был в меню, но не закрывается после выбора: звёзды и цвета отмечаются по несколько.
+/// «★★» — только две звезды, «★★★ ★★★★ ★★★★★» — от трёх; ничего не отмечено — фильтра нет
+private struct MarkFilterPanel: View {
+    @Bindable var session: PhotoSession
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        let filter = session.markFilter
+        VStack(alignment: .leading, spacing: 0) {
+            header("Звёзды")
+            MenuRow(title: "Без звёзд", checked: filter.ratings.contains(0)) { toggleRating(0) }
+            ForEach(1...5, id: \.self) { n in
+                MenuRow(title: String(repeating: "★", count: n), checked: filter.ratings.contains(n)) { toggleRating(n) }
+            }
+            header("Цвет")
+            MenuRow(title: "Без цвета", checked: filter.colors.contains(0)) { toggleColor(0) }
+            ForEach(ColorClass.allCases) { color in
+                MenuRow(title: color.title, checked: filter.colors.contains(color.rawValue), dot: color.color) {
+                    toggleColor(color.rawValue)
+                }
+            }
+            Divider().padding(.vertical, 5)
+            MenuRow(title: "Сбросить фильтр", enabled: filter.isActive) {
+                session.markFilter = MarkFilter()
+            }
+            Divider().padding(.vertical, 5)
+            MenuRow(title: "Записать звёзды и цвета в XMP") {
+                session.exportMarks()
+            }
+        }
+        .padding(5)
+        .frame(minWidth: 220)
+        .fixedSize()
+        // Как у меню: оформление окна, а не системы (окно бывает тёмным при светлой macOS)
+        .preferredColorScheme(theme.isLight ? .light : .dark)
+    }
+
+    private func header(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+    }
+
+    private func toggleRating(_ n: Int) {
+        if session.markFilter.ratings.contains(n) {
+            session.markFilter.ratings.remove(n)
+        } else {
+            session.markFilter.ratings.insert(n)
+        }
+    }
+
+    private func toggleColor(_ n: Int) {
+        if session.markFilter.colors.contains(n) {
+            session.markFilter.colors.remove(n)
+        } else {
+            session.markFilter.colors.insert(n)
+        }
+    }
+}
+
+/// Строка в стиле системного меню: галочка, кружок цвета, подсветка при наведении
+private struct MenuRow: View {
+    let title: String
+    var checked: Bool? = nil
+    var dot: Color? = nil
+    var enabled = true
+    let action: () -> Void
+
+    @State private var hovered = false
+
+    var body: some View {
+        let lit = hovered && enabled
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .opacity(checked == true ? 1 : 0)
+                    .frame(width: 12)
+                if let dot {
+                    Circle()
+                        .fill(dot)
+                        .frame(width: 10, height: 10)
+                }
+                Text(title)
+                    .font(.system(size: 13))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(lit ? Color.white : (enabled ? Color.primary : Color.secondary))
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(lit ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .onHover { hovered = $0 }
     }
 }

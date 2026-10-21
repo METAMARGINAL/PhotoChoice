@@ -40,7 +40,7 @@ struct SettingsView: View {
     @AppStorage("renameOnMove") private var renameOnMove = false
     @Bindable private var analysisStore = AnalysisStore.shared
     @AppStorage("seriesGap") private var seriesGap: Double = 3
-    @AppStorage("defectAutoZoom") private var defectAutoZoom = true
+    @AppStorage("defectAutoZoom") private var defectAutoZoom = false
     @AppStorage("peopleEnabled") private var peopleEnabled = true
     @AppStorage("peopleDistance") private var peopleDistance: Double = PeopleGrouping.defaultDistance
     @AppStorage("qualityModelEnabled") private var qualityModelEnabled = true

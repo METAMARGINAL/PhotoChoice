@@ -1070,6 +1070,7 @@ final class AnalysisStore {
         signals = [:]
         people = []
         peopleRun += 1
+        isGroupingPeople = false
         done = 0
         total = photos.count
 
@@ -1121,6 +1122,7 @@ final class AnalysisStore {
         signals = [:]
         people = []
         peopleRun += 1
+        isGroupingPeople = false
     }
 
     private func finish(_ url: URL, _ record: AnalysisRecord?, run: Int) {

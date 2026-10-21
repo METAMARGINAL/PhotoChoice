@@ -12,6 +12,8 @@ struct CompareView: View {
 
     @Environment(\.theme) private var theme
     @AppStorage("marksEnabled") private var marksEnabled = false
+    @AppStorage("clipHighlights") private var clipHighlights = false
+    @AppStorage("clipShadows") private var clipShadows = false
 
     @State private var leftImage: NSImage?
     @State private var rightImage: NSImage?
@@ -107,6 +109,11 @@ struct CompareView: View {
                         .resizable()
                         .interpolation(.high)
                         .scaledToFit()
+                        .overlay {
+                            if clipHighlights || clipShadows, let url {
+                                ClippingLayer(url: url, image: image, highlights: clipHighlights, shadows: clipShadows)
+                            }
+                        }
                         .overlay {
                             if let url {
                                 AnnotationLayer(session: session, url: url, zoom: t.zoom)

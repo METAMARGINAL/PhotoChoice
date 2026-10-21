@@ -116,21 +116,34 @@ enum MarkCommand {
     }
 }
 
-/// Фильтр сетки: звёзд не меньше `minRating` и цвет из `colors` (пусто — любой; 0 — без цвета)
+/// Фильтр сетки: число звёзд из `ratings` и цвет из `colors` (пусто — любые; 0 — без звёзд / без цвета)
 struct MarkFilter: Equatable {
-    var minRating = 0
+    var ratings: Set<Int> = []
     var colors: Set<Int> = []
 
-    var isActive: Bool { minRating > 0 || !colors.isEmpty }
+    var isActive: Bool { !ratings.isEmpty || !colors.isEmpty }
 
     func matches(_ mark: PhotoMark) -> Bool {
-        mark.rating >= minRating && (colors.isEmpty || colors.contains(mark.color))
+        (ratings.isEmpty || ratings.contains(mark.rating)) && (colors.isEmpty || colors.contains(mark.color))
+    }
+
+    /// «★2», «★3+», «★2, 4» — выбранные звёзды для кнопки фильтра
+    private var ratingSummary: String? {
+        let sorted = ratings.sorted()
+        guard let low = sorted.first else { return nil }
+        if sorted.count == 1 {
+            return low == 0 ? "Без звёзд" : "★\(low)"
+        }
+        if low > 0, sorted == Array(low...5) {
+            return "★\(low)+"
+        }
+        return "★" + sorted.map(String.init).joined(separator: ", ")
     }
 
     /// «★3+ · 2 цвета» для кнопки фильтра
     var summary: String {
         var parts: [String] = []
-        if minRating > 0 { parts.append("★\(minRating)+") }
+        if let ratingSummary { parts.append(ratingSummary) }
         if colors.count == 1, let only = colors.first {
             parts.append(ColorClass(rawValue: only)?.title ?? "Без цвета")
         } else if colors.count > 1 {
@@ -165,6 +178,14 @@ final class MarkStore {
 
     func setColor(_ urls: [URL], _ color: Int) {
         update(urls) { $0.color = color }
+    }
+
+    /// Отмена: кадрам возвращаются прежние звёзды и цвет
+    func restore(_ previous: [URL: PhotoMark]) {
+        for (url, mark) in previous {
+            marks[Self.key(url)] = mark.isEmpty ? nil : mark
+        }
+        scheduleSave()
     }
 
     /// Кадр перенесли, отправили в корзину или вернули: оценка следует за файлом
@@ -204,11 +225,27 @@ final class MarkStore {
         saveScheduled = true
         Task {
             try? await Task.sleep(for: .seconds(1))
-            saveScheduled = false
-            guard let file = Self.file, let data = try? JSONEncoder().encode(marks) else { return }
-            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: file, options: .atomic)
+            saveNow()
         }
+    }
+
+    /// Оценку поставили и сразу закрыли приложение — отложенная запись не успела бы
+    @ObservationIgnored private var quitObserver: NSObjectProtocol?
+
+    private init() {
+        quitObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { MarkStore.shared.saveNow() }
+        }
+    }
+
+    private func saveNow() {
+        guard saveScheduled else { return }
+        saveScheduled = false
+        guard let file = Self.file, let data = try? JSONEncoder().encode(marks) else { return }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: file, options: .atomic)
     }
 
     // MARK: XMP

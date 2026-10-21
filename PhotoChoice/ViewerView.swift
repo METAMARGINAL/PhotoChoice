@@ -6,6 +6,9 @@ struct ViewerView: View {
 
     @Environment(\.theme) private var theme
     @AppStorage("marksEnabled") private var marksEnabled = false
+    /// Подсветка пересветов и провалов — треугольники на гистограмме в сведениях
+    @AppStorage("clipHighlights") private var clipHighlights = false
+    @AppStorage("clipShadows") private var clipShadows = false
 
     @State private var currentImage: NSImage?
     /// Тот же кадр в полном разрешении — подгружается, когда при зуме пикселей превью уже не хватает
@@ -148,6 +151,12 @@ struct ViewerView: View {
                     Image(nsImage: fullImage ?? currentImage)
                         .resizable()
                         .scaledToFit()
+                        .overlay {
+                            if clipHighlights || clipShadows, let url = session.currentPhoto {
+                                ClippingLayer(url: url, image: fullImage ?? currentImage,
+                                              highlights: clipHighlights, shadows: clipShadows)
+                            }
+                        }
                         .overlay {
                             if let url = session.currentPhoto {
                                 AnnotationLayer(session: session, url: url, zoom: zoom)
@@ -684,9 +693,9 @@ struct ViewerView: View {
         }
     }
 
-    /// Открывать кадр из «Брака» сразу на проблемном месте (настройка, по умолчанию вкл.)
+    /// Открывать кадр из «Брака» сразу на проблемном месте (настройка, по умолчанию выкл.)
     private var autoZoomEnabled: Bool {
-        UserDefaults.standard.object(forKey: "defectAutoZoom") as? Bool ?? true
+        UserDefaults.standard.bool(forKey: "defectAutoZoom")
     }
 
     /// Кадр из «Брака» с размытием или глазами: сразу 100 % (пиксель снимка = пиксель экрана)

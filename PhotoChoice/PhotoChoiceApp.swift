@@ -106,7 +106,7 @@ struct PhotoChoiceApp: App {
                 .keyboardShortcut(.delete, modifiers: [])
                 .disabled(!session.isViewing)
 
-                Button("Отменить перенос") {
+                Button("Отменить") {
                     session.undo()
                 }
                 .keyboardShortcut("z", modifiers: [.command])

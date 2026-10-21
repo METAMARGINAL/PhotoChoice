@@ -8,12 +8,18 @@
 
 **PhotoChoice** is a small macOS app for fast photo culling. Pick a folder, browse all shots in a grid, open any of them full screen, and sort each one with a single key or swipe: keep it, send it to one of your folders, or move it to the Trash.
 
-**Current version: 1.3** — see [CHANGELOG.md](CHANGELOG.md).
+**Current version: 1.4** — see [CHANGELOG.md](CHANGELOG.md).
+
+### Download
+
+**[Download PhotoChoice.dmg](https://github.com/METAMARGINAL/photochoice/releases/latest/download/PhotoChoice.dmg)** — the latest version, macOS 26.2 or later. Open the DMG and drag PhotoChoice to Applications.
+
+The app is not notarized by Apple, so the first launch is blocked: open System Settings → Privacy & Security, click "Open Anyway" next to PhotoChoice and confirm. After that it opens normally.
 
 ### Features
 
 - **Smart culling** (in development): photos are analyzed in the background on this Mac (nothing is uploaded, files are never changed) and the grid gets three more sections. **Rejects** (`⌘2`) — blurry or out-of-focus shots (checked at 100 % around the eyes or the main subject), softer than their burst neighbors, closed eyes, blown highlights, too dark, tilted horizon, accidental shots; a small mark in "All photos" shows the reason. **Bursts** (`⌘3`) — shots taken in a row that look alike (and have the same faces), each with a header and the best shot marked: sharpest, with everyone's eyes open. **People** (`⌘4`) — faces that appear in several shots, grouped into people with the AuraFace recognition model (face vectors stay in the analysis cache on this Mac). Strictness, burst interval and "open rejects at the problem spot at 100 %" are in Settings. The **Reject calibration** panel (`⌥⌘K`) shows every photo on each metric's scale, lets you move thresholds, label shots as reject / good and train a small model on your labels. Apple's MobileCLIP model double-checks "Blurry": a shot stays in Rejects only if the model also sees it as out of focus; its other scores are shown in the calibration panel. Both models are in the repository (see below).
-- **Stars and color labels** (off by default, Settings → "Stars and colors"): `⌥1`–`⌥5` set stars, `⌃1`–`⌃8` set a color label, `⌥0` / `⌃0` clear them; in the grid they apply to the selection. You can also click the stars and the color dot under a thumbnail (on hover), in the viewer and in compare mode. Filter the grid by stars and colors with the button above it. Marks are stored in the app and follow a photo when it is moved. "Write to XMP" saves them to a sidecar next to the photo (`DSCF0001.xmp`: `xmp:Rating`, `xmp:Label`) without touching the photo; an existing sidecar keeps everything else and moves together with its photo.
+- **Stars and color labels** (off by default, Settings → "Stars and colors"): `⌥1`–`⌥5` set stars, `⌃1`–`⌃8` set a color label, `⌥0` / `⌃0` clear them; in the grid they apply to the selection. You can also click the stars and the color dot under a thumbnail (on hover), in the viewer and in compare mode. Filter the grid by stars and colors with the button above it: pick one or several star counts and colors, e.g. only ★★ or ★★★–★★★★★. Marks are stored in the app and follow a photo when it is moved. "Write to XMP" saves them to a sidecar next to the photo (`DSCF0001.xmp`: `xmp:Rating`, `xmp:Label`) without touching the photo; an existing sidecar keeps everything else and moves together with its photo.
 - **Grid of all photos** (new in 1.1): thumbnails with file name, size, resolution and camera model. Adjust thumbnail size with the slider, pinch, or `+` / `−` / `0`. Sorting keys work right in the grid.
 - **Compare two shots** (new in 1.3, key `C`): reference (A) on the left, candidate (B) on the right, synced zoom and pan, swap sides, promote the candidate to reference, sort the active side with `1`–`9` / `Delete`.
 - **Color palette** (new in 1.3): about 10 main colors of the photo in the info panel (k-means in OKLab, works from the embedded preview, so RAW is fast).
@@ -21,13 +27,13 @@
 - **RAW + JPEG pairs** (new in 1.3): files with the same name are shown as one card and are moved, trashed and restored together.
 - **Rename by metadata** (new in 1.3, off by default): when moved to a destination folder, a photo can be renamed from its capture date and time, e.g. `2026-06-14_174212_DSC_0452`. Undo restores the old name.
 - **Settings window** (`⌘,`): theme, light/dark mode, RAW + JPEG pairs, renaming template with a live example.
-- **Photo info panel** (new in 1.2, key `I`): shutter speed, aperture, ISO, focal length, camera and lens, exposure settings, resolution, color profile, GPS location, file details, and an RGB histogram with clipped highlights and shadows.
+- **Photo info panel** (new in 1.2, key `I`): shutter speed, aperture, ISO, focal length, camera and lens, exposure settings, resolution, color profile, GPS location, file details, and an RGB histogram with clipped highlights and shadows. Click a triangle in the histogram corner (or the number under it) to show crushed shadows in blue or clipped highlights in red right on the photo, in the viewer and in compare mode — like in Lightroom.
 - **Annotations** (new in 1.2, key `D`): draw on a photo with a pen, marker, arrow, rectangle or oval, in 6 colors and 3 sizes, with an eraser and undo. Annotations stay in memory and never change the original. Save an annotated copy (`⌘S`) or copy it to the clipboard (`⌘C` / `⇧⌘C`). Photos with annotations are marked in the grid.
 - **Trackpad and mouse** (new in 1.2): two-finger swipe to go to the next or previous photo, pinch and double-tap zoom toward the cursor, `⌘` / `⌥` + scroll to zoom with a mouse, zoom out below fit-to-screen.
 - Full-screen viewer with fast loading: nearby photos are decoded in advance.
 - Up to 9 destination folders, mapped to keys `1`–`9`. If you don't add any, a `Отобранные` (Selected) folder is created inside the source folder.
 - Swipe right or press `1` to move the photo to the first folder. Swipe left or press `Delete` to move it to the Trash.
-- Undo the last move with `Z` or `⌘Z`. The file goes back to where it was.
+- Undo the last move, star or color with `Z` or `⌘Z`. A moved file goes back to where it was.
 - Zoom with pinch, double-click, or `+` / `−` / `0`. Pan the image by dragging.
 - Supports JPEG, PNG, HEIC/HEIF, TIFF, WebP, GIF, BMP and RAW (DNG, RAF, CR2, CR3, NEF, ARW, ORF, RW2).
 - Optionally includes subfolders. Destination folders are skipped when it does.
@@ -97,6 +103,8 @@ Compare:
 
 ### Build
 
+To build and install over `/Applications/PhotoChoice.app` in one step: `./scripts/install.sh` (stars, colors, analysis cache and settings are kept — they live in the app container, not in the app). To build the DMG for a release: `./scripts/make-dmg.sh` (see the comments inside for Developer ID signing and notarization), then upload `build/PhotoChoice.dmg` to a GitHub release under exactly this name — the download link always points to the latest one.
+
 1. Install Git LFS before cloning: `brew install git-lfs && git lfs install`. The Core ML models (≈330 MB) are stored in LFS; without it you get small pointer files instead of models and the app runs without them.
 2. Clone the repository.
 3. Open `PhotoChoice.xcodeproj` in Xcode.
@@ -130,12 +138,18 @@ The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style
 
 **PhotoChoice** — небольшое приложение для macOS, чтобы быстро отбирать фотографии. Выберите папку, просмотрите все кадры сеткой, откройте любой на весь экран и одной клавишей или свайпом решайте его судьбу: оставить, отправить в одну из своих папок или убрать в корзину.
 
-**Текущая версия: 1.3** — см. [CHANGELOG.md](CHANGELOG.md).
+**Текущая версия: 1.4** — см. [CHANGELOG.md](CHANGELOG.md).
+
+### Скачать
+
+**[Скачать PhotoChoice.dmg](https://github.com/METAMARGINAL/photochoice/releases/latest/download/PhotoChoice.dmg)** — последняя версия, macOS 26.2 или новее. Откройте DMG и перетащите PhotoChoice в «Программы».
+
+Приложение не нотаризовано Apple, поэтому первый запуск macOS заблокирует: откройте Системные настройки → Конфиденциальность и безопасность, нажмите «Всё равно открыть» рядом с PhotoChoice и подтвердите. Дальше оно открывается как обычно.
 
 ### Возможности
 
 - **Умный отбор** (в разработке): фото анализируются в фоне на этом Mac (ничего не отправляется, файлы не меняются), и в сетке появляются ещё три раздела. **Брак** (`⌘2`) — размытые кадры и промахи фокуса (проверяется в 100 % на глазах или главном объекте), кадры мягче соседей по серии, закрытые глаза, пересвет, темнота, завал горизонта, случайные кадры; в «Все фото» на таких кадрах маленький значок с причиной. **Серии** (`⌘3`) — кадры, снятые подряд и похожие друг на друга (в том числе по лицам), с заголовками и отметкой лучшего кадра: самый резкий, у всех открыты глаза. **Люди** (`⌘4`) — лица, которые встречаются на нескольких кадрах, собранные в людей моделью распознавания AuraFace (векторы лиц хранятся только в кэше анализа на этом Mac). Строгость, интервал серии и «открывать брак сразу в 100 % на проблемном месте» — в настройках. Панель **«Калибровка брака»** (`⌥⌘K`) показывает все кадры на шкале каждой метрики, позволяет двигать пороги, размечать кадры как «брак» и «норма» и обучить по этой разметке небольшую модель. Модель MobileCLIP от Apple перепроверяет «Размыто»: кадр остаётся в браке, только если и она видит, что он не в фокусе; остальные её оценки показываются в калибровке. Обе модели лежат в репозитории (см. ниже).
-- **Звёзды и цветовые метки** (по умолчанию выключены, Настройки → «Звёзды и цвета»): `⌥1`–`⌥5` ставят звёзды, `⌃1`–`⌃8` — цвет, `⌥0` / `⌃0` снимают; в сетке — выделенным кадрам. Звёзды и кружок цвета можно и кликнуть: под миниатюрой при наведении, в просмотре и в сравнении. Фильтр по звёздам и цвету — кнопка над сеткой. Оценки хранятся в приложении и переезжают вместе с кадром. «Записать в XMP» сохраняет их в файл рядом с фото (`DSCF0001.xmp`: `xmp:Rating`, `xmp:Label`), сам снимок не меняется; в существующем XMP остальное остаётся, и он переносится вместе с кадром.
+- **Звёзды и цветовые метки** (по умолчанию выключены, Настройки → «Звёзды и цвета»): `⌥1`–`⌥5` ставят звёзды, `⌃1`–`⌃8` — цвет, `⌥0` / `⌃0` снимают; в сетке — выделенным кадрам. Звёзды и кружок цвета можно и кликнуть: под миниатюрой при наведении, в просмотре и в сравнении. Фильтр по звёздам и цвету — кнопка над сеткой: можно выбрать одно или несколько значений, например только ★★ или ★★★–★★★★★. Оценки хранятся в приложении и переезжают вместе с кадром. «Записать в XMP» сохраняет их в файл рядом с фото (`DSCF0001.xmp`: `xmp:Rating`, `xmp:Label`), сам снимок не меняется; в существующем XMP остальное остаётся, и он переносится вместе с кадром.
 - **Сетка всех фото** (новое в 1.1): миниатюры с именем файла, размером, разрешением и моделью камеры. Размер миниатюр меняется слайдером, щипком или клавишами `+` / `−` / `0`. Клавиши отбора работают прямо в сетке.
 - **Сравнение двух кадров** (новое в 1.3, клавиша `C`): слева эталон (A), справа кандидат (B), синхронные масштаб и перемещение, обмен сторон, кандидат одной клавишей становится эталоном, активную сторону можно отбирать клавишами `1`–`9` / `Delete`.
 - **Палитра кадра** (новое в 1.3): около 10 основных цветов снимка в панели сведений (k-means в OKLab, считается по встроенному превью, поэтому быстро и для RAW).
@@ -143,13 +157,13 @@ The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style
 - **Пары RAW + JPEG** (новое в 1.3): файлы с одинаковым именем показываются одной карточкой и переносятся, удаляются и возвращаются вместе.
 - **Переименование по метаданным** (новое в 1.3, по умолчанию выключено): при переносе в папку назначения кадр получает имя по дате и времени съёмки, например `2026-06-14_174212_DSC_0452`. Отмена возвращает прежнее имя.
 - **Окно «Настройки»** (`⌘,`): тема, светлый и тёмный режим, пары RAW + JPEG, шаблон переименования с примером на реальном кадре.
-- **Сведения о снимке** (новое в 1.2, клавиша `I`): выдержка, диафрагма, ISO, фокусное расстояние, камера и объектив, параметры съёмки, разрешение, цветовой профиль, координаты съёмки, данные файла и RGB-гистограмма с долей пересвеченных и провальных пикселей.
+- **Сведения о снимке** (новое в 1.2, клавиша `I`): выдержка, диафрагма, ISO, фокусное расстояние, камера и объектив, параметры съёмки, разрешение, цветовой профиль, координаты съёмки, данные файла и RGB-гистограмма с долей пересвеченных и провальных пикселей. Клик по треугольнику в углу гистограммы (или по цифре под ней) показывает прямо на кадре провалы синим или пересветы красным — в просмотре и в сравнении, как в Lightroom.
 - **Пометки** (новое в 1.2, клавиша `D`): рисуйте на фото карандашом, маркером, стрелкой, рамкой или овалом, 6 цветов и 3 толщины, есть ластик и отмена. Пометки хранятся только в памяти и не меняют оригинал. Копию с пометками можно сохранить (`⌘S`) или скопировать в буфер обмена (`⌘C` / `⇧⌘C`). Фото с пометками отмечены в сетке.
 - **Трекпад и мышь** (новое в 1.2): свайп двумя пальцами листает фото, щипок и двойной тап увеличивают к курсору, `⌘` / `⌥` + прокрутка меняет масштаб мышью, фото можно уменьшить меньше размера экрана.
 - Полноэкранный просмотр с быстрой загрузкой: соседние фото подгружаются заранее.
 - До 9 папок назначения, каждой соответствует клавиша `1`–`9`. Если ни одной не добавить, внутри исходной папки создаётся папка «Отобранные».
 - Свайп вправо или клавиша `1` переносит фото в первую папку. Свайп влево или `Delete` отправляет его в корзину.
-- `Z` или `⌘Z` отменяет последний перенос: файл возвращается на место.
+- `Z` или `⌘Z` отменяет последний перенос, звёзды или цвет: перенесённый файл возвращается на место.
 - Масштаб меняется щипком, двойным кликом или клавишами `+` / `−` / `0`. Увеличенное фото можно двигать перетаскиванием.
 - Поддерживаются JPEG, PNG, HEIC/HEIF, TIFF, WebP, GIF, BMP и RAW (DNG, RAF, CR2, CR3, NEF, ARW, ORF, RW2).
 - Можно включить просмотр вложенных папок. Папки назначения при этом пропускаются.
@@ -163,7 +177,7 @@ The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style
 |---|---|
 | `1`–`9` | Перенести в папку назначения |
 | `Delete` | В корзину |
-| `Z` / `⌘Z` | Отменить перенос |
+| `Z` / `⌘Z` | Отменить перенос, звёзды или цвет |
 | `F` | Переключиться между сеткой и одним фото |
 | `I` | Показать / скрыть сведения о снимке |
 | `C` | Включить / выключить сравнение |
@@ -218,6 +232,8 @@ The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style
 - Для сборки нужен Xcode 26 или новее
 
 ### Сборка
+
+Собрать и поставить поверх `/Applications/PhotoChoice.app` одной командой: `./scripts/install.sh` (звёзды, цвета, кэш анализа и настройки остаются — они лежат в контейнере приложения, а не в нём самом). DMG для релиза собирает `./scripts/make-dmg.sh` (подпись Developer ID и нотаризация — в комментарии внутри). Затем загрузите `build/PhotoChoice.dmg` в релиз на GitHub ровно под этим именем — ссылка «Скачать» всегда ведёт на последний.
 
 1. До клонирования поставьте Git LFS: `brew install git-lfs && git lfs install`. Модели Core ML (≈330 МБ) хранятся в LFS; без него вместо моделей скачаются маленькие файлы-ссылки, и приложение будет работать без моделей.
 2. Склонируйте репозиторий.

@@ -19,12 +19,21 @@ enum ImageLoader {
 
     /// Номер последнего запроса предзагрузки: старые при быстром листании не декодируются
     nonisolated private static let prefetchRun = OSAllocatedUnfairLock(initialState: 0)
+    nonisolated private static let cacheGeneration = OSAllocatedUnfairLock(initialState: 0)
+    private static var prefetchTask: Task<Void, Never>?
 
-    nonisolated static let photoExtensions: Set<String> = [
-        "jpg", "jpeg", "png", "heic", "heif", "tif", "tiff",
-        "webp", "gif", "bmp", "dng", "raf", "cr2", "cr3",
-        "nef", "arw", "orf", "rw2"
-    ]
+    private nonisolated static let decodeQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "PhotoChoice.preview"
+        queue.qualityOfService = .userInitiated
+        BackgroundWork.configure(queue, nominal: 2, fair: 1)
+        return queue
+    }()
+
+    nonisolated static let rawExtensions: Set<String> = ["dng", "raf", "cr2", "cr3", "nef", "arw", "orf", "rw2"]
+    nonisolated static let photoExtensions = rawExtensions.union([
+        "jpg", "jpeg", "png", "heic", "heif", "tif", "tiff", "webp", "gif", "bmp"
+    ])
 
     nonisolated static func isPhoto(_ url: URL) -> Bool {
         photoExtensions.contains(url.pathExtension.lowercased())
@@ -38,29 +47,53 @@ enum ImageLoader {
         if let cached = cache.object(forKey: url as NSURL) {
             return cached
         }
+        let generation = cacheGeneration.withLock { $0 }
         guard let image = decode(url, maxPixelSize: maxPixelSize) else { return nil }
-        cache.setObject(image, forKey: url as NSURL, cost: cost(image))
+        cacheGeneration.withLock { current in
+            if current == generation { cache.setObject(image, forKey: url as NSURL, cost: cost(image)) }
+        }
         return image
     }
 
     static func imageAsync(at url: URL, maxPixelSize: CGFloat = 2400) async -> NSImage? {
-        let box = await Task.detached(priority: .userInitiated) {
-            ImageBox(image: ImageLoader.image(at: url, maxPixelSize: maxPixelSize))
-        }.value
-        return box.image
+        if let cached = cachedImage(at: url) { return cached }
+        return await queuedImage { ImageLoader.image(at: url, maxPixelSize: maxPixelSize) }
     }
 
     static func prefetch(_ urls: [URL]) {
+        prefetchTask?.cancel()
         let run = prefetchRun.withLock { value -> Int in
             value += 1
             return value
         }
-        Task.detached(priority: .userInitiated) {
+        prefetchTask = Task(priority: .utility) {
             for url in urls where ImageLoader.cachedImage(at: url) == nil {
-                guard ImageLoader.prefetchRun.withLock({ $0 }) == run else { return }
-                _ = ImageLoader.image(at: url)
+                guard !Task.isCancelled, ImageLoader.prefetchRun.withLock({ $0 }) == run,
+                      ProcessInfo.processInfo.thermalState == .nominal,
+                      !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
+                _ = await queuedImage(priority: .low) { ImageLoader.image(at: url) }
             }
         }
+    }
+
+    /// Общая очередь для обычного просмотра, сравнения, зума и предзагрузки.
+    /// Отменённые запросы пропускаются до начала дорогостоящего декодирования.
+    private static func queuedImage(priority: Operation.QueuePriority = .normal,
+                                    work: @escaping @Sendable () -> NSImage?) async -> NSImage? {
+        let cancelled = OSAllocatedUnfairLock(initialState: false)
+        let box: ImageBox = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let operation = BlockOperation {
+                    let image = cancelled.withLock { $0 } ? nil : autoreleasepool { work() }
+                    continuation.resume(returning: ImageBox(image: image))
+                }
+                operation.queuePriority = priority
+                decodeQueue.addOperation(operation)
+            }
+        } onCancel: {
+            cancelled.withLock { $0 = true }
+        }
+        return box.image
     }
 
     nonisolated static func evict(_ url: URL) {
@@ -69,9 +102,15 @@ enum ImageLoader {
     }
 
     /// Смена папки: картинки прошлой больше не нужны
-    nonisolated static func removeAll() {
-        cache.removeAllObjects()
-        fullCache.removeAllObjects()
+    static func removeAll() {
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        prefetchRun.withLock { $0 += 1 }
+        cacheGeneration.withLock { generation in
+            generation += 1
+            cache.removeAllObjects()
+            fullCache.removeAllObjects()
+        }
     }
 
     nonisolated private static func cost(_ image: NSImage) -> Int {
@@ -84,6 +123,7 @@ enum ImageLoader {
     nonisolated(unsafe) private static let fullCache: NSCache<NSURL, NSImage> = {
         let cache = NSCache<NSURL, NSImage>()
         cache.countLimit = 2
+        cache.totalCostLimit = 256 * 1024 * 1024
         return cache
     }()
 
@@ -97,13 +137,15 @@ enum ImageLoader {
     /// Снимок в полном разрешении (с учётом поворота). Для RAW — самое крупное встроенное превью
     static func fullImageAsync(at url: URL) async -> NSImage? {
         if let cached = cachedFullImage(at: url) { return cached }
-        let box = await Task.detached(priority: .userInitiated) {
-            ImageBox(image: ImageLoader.decode(url, maxPixelSize: ImageLoader.maxFullSide))
-        }.value
-        if let image = box.image {
-            fullCache.setObject(image, forKey: url as NSURL)
+        return await queuedImage {
+            if let cached = cachedFullImage(at: url) { return cached }
+            let generation = cacheGeneration.withLock { $0 }
+            guard let image = decode(url, maxPixelSize: maxFullSide) else { return nil }
+            cacheGeneration.withLock { current in
+                if current == generation { fullCache.setObject(image, forKey: url as NSURL, cost: cost(image)) }
+            }
+            return image
         }
-        return box.image
     }
 
     /// Размер снимка в пикселях с учётом поворота (без декодирования)

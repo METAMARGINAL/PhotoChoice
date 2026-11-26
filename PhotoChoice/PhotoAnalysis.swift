@@ -7,6 +7,37 @@ import ImageIO
 import Observation
 import Vision
 
+/// Лимиты фоновых очередей меняются по сигналам macOS. Активные операции
+/// заканчиваются, новые стартуют с уменьшенным параллелизмом.
+nonisolated enum BackgroundWork {
+    static func limits(for state: ProcessInfo.ThermalState, lowPower: Bool,
+                       nominal: Int, fair: Int, pauseWhenCritical: Bool) -> (concurrency: Int, paused: Bool) {
+        let concurrency: Int = switch state {
+        case .nominal: lowPower ? 1 : nominal
+        case .fair: lowPower ? 1 : fair
+        case .serious, .critical: 1
+        @unknown default: 1
+        }
+        return (concurrency, pauseWhenCritical && state == .critical)
+    }
+
+    static func configure(_ queue: OperationQueue, nominal: Int, fair: Int, pauseWhenCritical: Bool = false) {
+        let update: @Sendable () -> Void = { [weak queue] in
+            guard let queue else { return }
+            let info = ProcessInfo.processInfo
+            let limits = limits(for: info.thermalState, lowPower: info.isLowPowerModeEnabled,
+                                nominal: nominal, fair: fair, pauseWhenCritical: pauseWhenCritical)
+            queue.maxConcurrentOperationCount = limits.concurrency
+            queue.isSuspended = limits.paused
+        }
+        _ = NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification,
+                                               object: nil, queue: nil) { _ in update() }
+        _ = NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange,
+                                               object: nil, queue: nil) { _ in update() }
+        update()
+    }
+}
+
 // Умный отбор, этап 1 (docs/SmartCulling.md §5): анализ кадров и кэш.
 // В кэш пишем только сырые метрики — вердикты «брак» и серии считаются из них на лету,
 // поэтому смена строгости не требует повторного анализа. Файлы только читаются.
@@ -108,11 +139,11 @@ nonisolated enum PhotoAnalyzer {
 
     private static let queue: OperationQueue = {
         let queue = OperationQueue()
-        // Половина ядер, от 2 до 3: анализ не отнимает весь процессор у листания.
-        // Каждый поток декодирует снимок в полном разрешении (≈100 МБ) — больше 3 потоков дают пик за 1 ГБ
-        queue.maxConcurrentOperationCount = max(2, min(3, ProcessInfo.processInfo.activeProcessorCount / 2))
         queue.qualityOfService = .utility
         queue.name = "PhotoChoice.analysis"
+        // Vision и Core ML сами распараллеливают вычисления. Два кадра одновременно
+        // оставляют ресурсы просмотрщику; при нагреве — один, при critical ждём остывания.
+        BackgroundWork.configure(queue, nominal: 2, fair: 1, pauseWhenCritical: true)
         return queue
     }()
 
@@ -216,9 +247,11 @@ nonisolated enum PhotoAnalyzer {
 
         // Полное разрешение декодируется один раз: резкость в 100 % у глаз самого крупного лица
         // (иначе в центре объекта) и вырезки для модели
-        let fullImage = fullResolution(source)
+        let focus = focusPoint(faces: faces, subject: subject)
+        // Без объекта и лиц полноразмерный кадр не участвует ни в одной метрике.
+        let fullImage = (focus != nil || !faces.isEmpty) ? fullResolution(source) : nil
         var full: (variance: Double, ratio: Double?, crop: CGImage)?
-        if let fullImage, let focus = focusPoint(faces: faces, subject: subject) {
+        if let fullImage, let focus {
             full = fullResolutionDetail(fullImage, focus: focus)
         }
         if let faceModel {
@@ -391,7 +424,7 @@ nonisolated enum PhotoAnalyzer {
 
     /// Искать людей (настройка `peopleEnabled`, по умолчанию вкл.). Выключено — отпечатки лиц не считаются
     static var peopleEnabled: Bool {
-        UserDefaults.standard.object(forKey: "peopleEnabled") as? Bool ?? true
+        UserDefaults.standard.bool(forKey: Pref.peopleEnabled)
     }
 
     /// Отпечаток лица: квадрат вокруг лица с полями 25 %, не меньше 40 px; меньше — узнать не по чему
@@ -582,7 +615,9 @@ nonisolated enum PhotoAnalyzer {
         let result = laplacianStats(gray, width: w, height: h)
         // Доля мелких деталей — при полном размере изображения анализа
         var ratio: Double?
-        if let full = grayPixels(image, width: image.width, height: image.height) {
+        if w == image.width, h == image.height {
+            ratio = detailRatio(image, fullVariance: result.variance)
+        } else if let full = grayPixels(image, width: image.width, height: image.height) {
             ratio = detailRatio(image, fullVariance: laplacianVariance(full, width: image.width, height: image.height))
         }
         return (result.variance, result.meanLuma, ratio)
@@ -663,8 +698,20 @@ final class AnalysisStore {
     private(set) var records: [URL: AnalysisRecord] = [:]
     private(set) var done = 0
     private(set) var total = 0
+    private(set) var thermalState = ProcessInfo.processInfo.thermalState
+
+    private init() {
+        _ = NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification,
+                                                    object: nil, queue: nil) { _ in
+            Task { @MainActor in AnalysisStore.shared.thermalState = ProcessInfo.processInfo.thermalState }
+        }
+    }
 
     var isRunning: Bool { total > 0 && done < total }
+    var progressText: String {
+        if thermalState == .critical { return "Анализ приостановлен: Mac охлаждается (\(done) из \(total))" }
+        return "Анализ: \(done) из \(total)"
+    }
 
     func metrics(for url: URL) -> PhotoMetrics? {
         records[url]?.metrics
@@ -783,13 +830,17 @@ final class AnalysisStore {
     private(set) var isComputingPrompts = false
 
     private func rebuildSignals() {
-        guard let prompts else {
-            signals = [:]
-            return
-        }
-        var result: [URL: ModelSignals] = [:]
-        for (url, record) in records where record.metrics.clipModel != nil {
-            result[url] = ModelSignals(record.metrics, prompts)
+        signals = [:]
+        updateSignals(for: records)
+    }
+
+    /// Векторы кадра не меняются между поступлениями результатов. Пересчитываем
+    /// только новые записи, а при смене подсказок — все.
+    private func updateSignals(for updated: [URL: AnalysisRecord]) {
+        guard let prompts, !updated.isEmpty else { return }
+        var result = signals
+        for (url, record) in updated {
+            result[url] = record.metrics.clipModel != nil ? ModelSignals(record.metrics, prompts) : nil
         }
         signals = result
     }
@@ -815,7 +866,7 @@ final class AnalysisStore {
             }
             prompts = bank
             rebuildSignals()
-            onDefectsChanged?()
+            reevaluate()
             promptMessage = "Подсказки посчитаны и сохранены на этом Mac"
         } catch {
             promptMessage = error.localizedDescription
@@ -847,10 +898,10 @@ final class AnalysisStore {
 
     private func rebuildSeries() {
         let items = records.map { (url: $0.key, metrics: $0.value.metrics) }
-        let found = SeriesGrouping.build(items, gap: seriesGap)
-        series = found
-        neighbors = SeriesGrouping.previousNeighbor(items)
-        contexts = SeriesGrouping.contexts(series: found, metrics: records.mapValues(\.metrics))
+        let found = SeriesGrouping.buildWithNeighbors(items, gap: seriesGap)
+        series = found.series
+        neighbors = found.neighbors
+        contexts = SeriesGrouping.contexts(series: found.series, metrics: records.mapValues(\.metrics))
     }
 
     // MARK: Обученная модель
@@ -925,23 +976,29 @@ final class AnalysisStore {
     // перерисовывает сетку, а кадров приходит по 10–20 в секунду
     @ObservationIgnored private var arrived: [URL: AnalysisRecord] = [:]
     @ObservationIgnored private var arrivedCount = 0
-    @ObservationIgnored private var flushScheduled = false
+    @ObservationIgnored private var flushTask: Task<Void, Never>?
 
     private func scheduleFlush() {
-        guard !flushScheduled else { return }
-        flushScheduled = true
-        Task {
-            try? await Task.sleep(for: .seconds(1))
-            flushScheduled = false
+        guard flushTask == nil else { return }
+        // Для больших папок пересборка серий и сетки занимает заметно больше времени.
+        // Итоговые результаты публикуются сразу, промежуточные — реже.
+        let interval = records.count >= 2000 ? 4 : records.count >= 500 ? 2 : 1
+        flushTask = Task {
+            try? await Task.sleep(for: .seconds(interval))
+            guard !Task.isCancelled else { return }
             flush()
         }
     }
 
     private func flush() {
+        flushTask?.cancel()
+        flushTask = nil
         guard arrivedCount > 0 else { return }
+        let updated = arrived
         takeArrived()
         done += arrivedCount
         arrivedCount = 0
+        updateSignals(for: updated)
         recomputeDefects()
         // Анализ новых кадров закончился — сообщаем, сколько это заняло
         if done >= total, runPending > 0, let runStarted {
@@ -953,6 +1010,7 @@ final class AnalysisStore {
         }
         if done >= total {
             PhotoAnalyzer.releaseModels()
+            saveNow()
         }
     }
 
@@ -967,7 +1025,6 @@ final class AnalysisStore {
     /// Новые записи анализа: пересобрать серии и пересчитать пометки
     private func recomputeDefects() {
         rebuildSeries()
-        rebuildSignals()
         reevaluate()
         // Людей — когда анализ закончен: группировка тяжелее и при каждом новом кадре не нужна
         if !isRunning {
@@ -981,6 +1038,7 @@ final class AnalysisStore {
     private(set) var people: [PersonCluster] = []
     private(set) var isGroupingPeople = false
     @ObservationIgnored private var peopleRun = 0
+    @ObservationIgnored private var peopleTask: Task<[PersonCluster], Never>?
 
     /// Порог похожести лиц (настройка `peopleDistance`)
     var peopleDistance: Double {
@@ -990,20 +1048,31 @@ final class AnalysisStore {
 
     /// Группировка в фоне; результат устаревшего запуска отбрасывается
     private func rebuildPeople() {
+        peopleTask?.cancel()
+        peopleRun += 1
         guard PhotoAnalyzer.peopleEnabled else {
             people = []
+            isGroupingPeople = false
+            peopleTask = nil
             return
         }
-        peopleRun += 1
         let run = peopleRun
         let items = records.map { (url: $0.key, metrics: $0.value.metrics) }
         let distance = peopleDistance
         isGroupingPeople = true
+        let task = Task.detached(priority: .utility) {
+            while ProcessInfo.processInfo.thermalState == .critical {
+                try? await Task.sleep(for: .seconds(1))
+                if Task.isCancelled { return [PersonCluster]() }
+            }
+            guard !Task.isCancelled else { return [PersonCluster]() }
+            return PeopleGrouping.cluster(items, maxDistance: distance)
+        }
+        peopleTask = task
         Task {
-            let found = await Task.detached(priority: .utility) {
-                PeopleGrouping.cluster(items, maxDistance: distance)
-            }.value
+            let found = await task.value
             guard run == peopleRun else { return }
+            peopleTask = nil
             people = found
             isGroupingPeople = false
             onDefectsChanged?()
@@ -1070,6 +1139,8 @@ final class AnalysisStore {
         signals = [:]
         people = []
         peopleRun += 1
+        peopleTask?.cancel()
+        peopleTask = nil
         isGroupingPeople = false
         done = 0
         total = photos.count
@@ -1082,6 +1153,7 @@ final class AnalysisStore {
             records = prepared.cached
             keptRecords = prepared.kept
             done = prepared.cached.count
+            rebuildSignals()
             recomputeDefects()
             runStarted = Date()
             runPending = prepared.pending.count
@@ -1099,6 +1171,12 @@ final class AnalysisStore {
     func cancel() {
         PhotoAnalyzer.cancelAll()
         PhotoAnalyzer.releaseModels()
+        flushTask?.cancel()
+        flushTask = nil
+        peopleTask?.cancel()
+        peopleTask = nil
+        peopleRun += 1
+        isGroupingPeople = false
         generation += 1
         takeArrived()
         arrivedCount = 0
@@ -1131,7 +1209,11 @@ final class AnalysisStore {
             arrived[url] = record
         }
         arrivedCount += 1
-        scheduleFlush()
+        if done + arrivedCount >= total {
+            flush()
+        } else {
+            scheduleFlush()
+        }
     }
 
     // MARK: Замер времени
@@ -1161,7 +1243,8 @@ final class AnalysisStore {
 
     /// Настройки серий изменились — пересобрать без повторного анализа
     func seriesSettingsChanged() {
-        recomputeDefects()
+        rebuildSeries()
+        reevaluate()
     }
 
     /// Файл перенесли или вернули: запись переезжает за ним, чтобы undo не требовал повторного анализа
@@ -1191,6 +1274,9 @@ final class AnalysisStore {
             labels[new.standardizedFileURL] = value
             saveLabels()
         }
+        // Кадр переименовали в той же папке — без записи кэша при следующем открытии он анализировался бы заново
+        unsaved = true
+        scheduleSave()
     }
 
     // MARK: Запись на диск

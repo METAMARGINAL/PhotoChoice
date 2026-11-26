@@ -57,6 +57,10 @@ enum PhotoDetailsLoader {
         cache.object(forKey: url as NSURL)?.details
     }
 
+    nonisolated static func evict(_ url: URL) {
+        cache.removeObject(forKey: url as NSURL)
+    }
+
     static func load(_ url: URL) async -> PhotoDetails {
         if let cached = cached(url) { return cached }
         return await Task.detached(priority: .utility) {

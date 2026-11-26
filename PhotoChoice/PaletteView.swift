@@ -57,7 +57,7 @@ struct PaletteSection: View {
         let c = theme.c
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(theme.isGlass ? "Цвета" : "ЦВЕТА")
+                Text("Цвета")
                     .themeLabel(theme)
                 Spacer()
                 Picker("Сортировка", selection: $sortMode) {

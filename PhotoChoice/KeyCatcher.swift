@@ -36,8 +36,13 @@ struct KeyCatcher: NSViewRepresentable {
 
     func updateNSView(_ nsView: CatcherView, context: Context) {
         apply(to: nsView)
-        if let window = nsView.window, window.firstResponder !== nsView {
+        // Пока идёт переход сетка ↔ просмотр, на экране два вида: фокус держит только последний появившийся
+        // Курсор в текстовом поле (поиск) — фокус не отбираем
+        if nsView === CatcherView.active, let window = nsView.window, window.firstResponder !== nsView,
+           !(window.firstResponder is NSTextView) {
             DispatchQueue.main.async {
+                // За это время курсор мог уйти в поле поиска
+                guard !(window.firstResponder is NSTextView) else { return }
                 window.makeFirstResponder(nsView)
             }
         }
@@ -79,6 +84,8 @@ struct KeyCatcher: NSViewRepresentable {
         }
 
         private var monitor: Any?
+        /// Последний вид, попавший в окно
+        static weak var active: CatcherView?
 
         override var acceptsFirstResponder: Bool { true }
         override var isFlipped: Bool { true }
@@ -92,6 +99,7 @@ struct KeyCatcher: NSViewRepresentable {
             super.viewDidMoveToWindow()
             removeMonitor()
             guard let window else { return }
+            CatcherView.active = self
             window.makeFirstResponder(self)
 
             monitor = NSEvent.addLocalMonitorForEvents(

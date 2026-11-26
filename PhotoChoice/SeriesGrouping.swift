@@ -25,27 +25,38 @@ nonisolated enum SeriesGrouping {
     /// человек сменил позу или жест — а сцена та же
     static let maxDistanceSameFaces: Float = 1.0
 
-    /// Серии (≥ 2 кадров) в порядке съёмки
-    static func build(_ items: [(url: URL, metrics: PhotoMetrics)], gap: Double) -> [[URL]] {
-        let dated = items.compactMap { item -> (url: URL, date: Date, print: [Float]?, faces: [FaceMetrics])? in
+    /// Серии и данные о соседях строятся из одной хронологии: отпечатки
+    /// декодируются и нормируются один раз, расстояние между парой тоже одно.
+    static func buildWithNeighbors(_ items: [(url: URL, metrics: PhotoMetrics)], gap: Double)
+        -> (series: [[URL]], neighbors: [URL: (gap: Double, distance: Double?, clip: Double?)]) {
+        typealias Frame = (url: URL, date: Date, print: [Float]?, clip: [Float]?, faces: [FaceMetrics])
+        let dated = items.compactMap { item -> Frame? in
             guard let date = item.metrics.captureDate else { return nil }
-            return (item.url, date, normalizedPrint(item.metrics), mainFaces(item.metrics))
+            return (item.url, date, normalizedPrint(item.metrics), ClipVector.unpack(item.metrics.clipFrame), mainFaces(item.metrics))
         }.sorted { $0.date < $1.date }
 
-        var result: [[URL]] = []
+        var series: [[URL]] = []
+        var neighbors: [URL: (gap: Double, distance: Double?, clip: Double?)] = [:]
         var chain: [URL] = []
-        var previous: (date: Date, print: [Float]?, faces: [FaceMetrics])?
+        var previous: Frame?
         for item in dated {
             var linked = false
             if let previous {
                 let interval = item.date.timeIntervalSince(previous.date)
+                var printDistance: Float?
+                if let a = previous.print, let b = item.print {
+                    printDistance = distance(a, b)
+                }
+                var clipDistance: Double?
+                if let a = previous.clip, let b = item.clip {
+                    clipDistance = ClipVector.distance(a, b)
+                }
+                neighbors[item.url] = (interval, printDistance.map(Double.init), clipDistance)
                 if interval <= gap {
                     let sameFaces = facesMatch(previous.faces, item.faces)
-                    if let a = previous.print, let b = item.print {
-                        let d = distance(a, b)
+                    if let d = printDistance {
                         linked = d <= maxDistance || (sameFaces && d <= maxDistanceSameFaces)
                     } else {
-                        // Без отпечатка — совсем близкие по времени кадры или те же лица
                         linked = interval <= 1 || sameFaces
                     }
                 }
@@ -53,60 +64,80 @@ nonisolated enum SeriesGrouping {
             if linked {
                 chain.append(item.url)
             } else {
-                if chain.count >= 2 { result.append(chain) }
+                if chain.count >= 2 { series.append(chain) }
                 chain = [item.url]
             }
-            previous = (item.date, item.print, item.faces)
+            previous = item
         }
-        if chain.count >= 2 { result.append(chain) }
-        return result
-    }
-
-    /// Для калибровки: у каждого кадра — интервал до предыдущего по времени, расстояние отпечатков с ним
-    /// и расстояние векторов модели (для серий на этапе E)
-    static func previousNeighbor(_ items: [(url: URL, metrics: PhotoMetrics)]) -> [URL: (gap: Double, distance: Double?, clip: Double?)] {
-        let dated = items.compactMap { item -> (url: URL, date: Date, print: [Float]?, clip: [Float]?)? in
-            guard let date = item.metrics.captureDate else { return nil }
-            return (item.url, date, normalizedPrint(item.metrics), ClipVector.unpack(item.metrics.clipFrame))
-        }.sorted { $0.date < $1.date }
-        var result: [URL: (gap: Double, distance: Double?, clip: Double?)] = [:]
-        for i in dated.indices.dropFirst() {
-            let a = dated[i - 1]
-            let b = dated[i]
-            var d: Double?
-            if let pa = a.print, let pb = b.print { d = Double(distance(pa, pb)) }
-            var clip: Double?
-            if let ca = a.clip, let cb = b.clip { clip = ClipVector.distance(ca, cb) }
-            result[b.url] = (b.date.timeIntervalSince(a.date), d, clip)
-        }
-        return result
+        if chain.count >= 2 { series.append(chain) }
+        return (series, neighbors)
     }
 
     /// Контекст каждого кадра серий: насколько он хуже лучшего соседа
     static func contexts(series: [[URL]], metrics: [URL: PhotoMetrics]) -> [URL: PhotoContext] {
         var result: [URL: PhotoContext] = [:]
         for (number, members) in series.enumerated() {
-            for url in members {
+            // Лучший сосед в каждой из двух групп фокуса определяется один раз.
+            // Второе максимальное значение нужно, чтобы исключить сам лучший кадр.
+            var groups = [false: ContextMaxima(), true: ContextMaxima()]
+            var frames: [URL: ContextValues] = [:]
+            for url in members where frames[url] == nil {
                 guard let m = metrics[url] else { continue }
-                // Сравниваем только с кадрами, где резкость мерили там же: у глаз — с лицами, в объекте — без лиц.
-                // Иначе портрет проигрывает соседнему кадру без людей, и «мягче соседей» ложное (по разметке — 6 из 6)
-                let others = members.filter { $0 != url }.compactMap { metrics[$0] }
-                    .filter { focusOnFace($0) == focusOnFace(m) }
+                let values = ContextValues(face: focusOnFace(m), sharpness: sharpness(m),
+                                           detail: detail(m), quality: faceQuality(m))
+                frames[url] = values
+                groups[values.face]?.sharpness.add(values.sharpness, url: url)
+                groups[values.face]?.detail.add(values.detail, url: url)
+                groups[values.face]?.quality.add(values.quality, url: url)
+            }
+            for (url, values) in frames {
+                guard let group = groups[values.face] else { continue }
                 var context = PhotoContext(series: number, seriesSize: members.count)
-
-                if let mine = sharpness(m), let best = others.compactMap(sharpness).max(), best > 0 {
+                if let mine = values.sharpness, let best = group.sharpness.excluding(url), best > 0 {
                     context.relSharpness = mine / best
                 }
-                if let mine = detail(m), let best = others.compactMap(detail).max() {
+                if let mine = values.detail, let best = group.detail.excluding(url) {
                     context.relDetail = mine - best
                 }
-                if let mine = faceQuality(m), let best = others.compactMap(faceQuality).max() {
+                if let mine = values.quality, let best = group.quality.excluding(url) {
                     context.relFaceQuality = mine - best
                 }
                 result[url] = context
             }
         }
         return result
+    }
+
+    private struct ContextValues {
+        let face: Bool
+        let sharpness: Double?
+        let detail: Double?
+        let quality: Double?
+    }
+
+    private struct ContextMaxima {
+        var sharpness = NeighborMaximum()
+        var detail = NeighborMaximum()
+        var quality = NeighborMaximum()
+    }
+
+    private struct NeighborMaximum {
+        var first: (url: URL, value: Double)?
+        var second: Double?
+
+        mutating func add(_ value: Double?, url: URL) {
+            guard let value else { return }
+            if let first, first.value >= value {
+                if second == nil || value > second! { second = value }
+            } else {
+                second = first?.value
+                first = (url, value)
+            }
+        }
+
+        func excluding(_ url: URL) -> Double? {
+            first?.url == url ? second : first?.value
+        }
     }
 
     // MARK: Лучший кадр серии

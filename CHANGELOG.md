@@ -1,5 +1,37 @@
 # Changelog / История изменений
 
+## Unreleased
+
+### English
+- Optional order by capture time (Settings → "Order photos by capture time"): photos from several cameras follow EXIF date and time instead of file names, and are copied (`⌘C`) and dragged in that order.
+- One-off rename of the whole open folder by capture time (Settings → Rename by metadata → "Once for the whole folder"); pairs and XMP keep a shared name, `Z` restores all names.
+- Themes 2.0: Film, Liquid Glass, Neutral and Light Table replace Studio, Glass, Quiet and Contact (the chosen theme carries over: Studio → Neutral, Quiet → Light Table, Contact → Film). Key hints are labeled with folder names.
+- Settings window with six pages; every feature is turned on separately (moving to folders, stars, colors, flags, smart culling, compare, drawing, photo info), three modes set them at once. Stars and colors used to be one switch: if it was on, both stay on.
+- Flags: `⌥P` pick, `⌥X` reject, `⌥U` clear; rejected photos are dimmed in the grid, the filter has "Picked", "Rejected", "No flag"; in XMP a rejected photo gets `xmp:Rating="-1"`.
+- `H` hides the viewer panels in any theme; auto-hide after 2 s is a setting (off by default).
+- Motion only where it helps: a photo grows out of the grid (240 ms), the info panel slides in; browsing, moving by keys and the confirmation are instant or fade in place. Respects "Reduce motion".
+- Neutral: background under the photo in the viewer is chosen in the info panel (five grays).
+- Right-click a photo in the grid or the viewer: "Open in Preview", "Open in" (any app that opens the file, the RAW of a pair separately, or another app), "Send via AirDrop" (with or without RAW). Edits saved in the other app show up when you come back to PhotoChoice.
+- Simple adjustments in the viewer (`E`): exposure, contrast, highlights, shadows, whites, blacks, temperature, tint, vibrance, saturation. `\` shows before / after, `Z` undoes the last slider move, double-click a slider name to reset it. The original never changes; `⌘S` saves a full-resolution JPEG copy with the source EXIF (RAW is developed again). Can be turned off in Settings → Features.
+- Grid: the info and calibration panels slide in over the grid instead of pushing it, and the grid reflows once without animation — no more stutter on `I` in large folders.
+- Search by file name above the grid (`⌘F`): several words must all be in the name (the RAW of a pair counts too), `4810-4830` finds frame numbers in a range; `Esc` clears it. The viewer then browses only the found photos.
+- Performance: adaptive analysis and image-loading concurrency based on macOS thermal state and Low Power Mode. Critical thermal conditions pause background photo analysis until the Mac cools down. MobileCLIP scores are calculated incrementally, series and people grouping use less repeated work and memory, and obsolete preview requests are cancelled. Existing analysis cache format and defect rules are retained.
+
+### Русский
+- Порядок по времени съёмки по желанию (Настройки → «Упорядочивать кадры по времени съёмки»): кадры с нескольких камер идут по дате и времени из EXIF, а не по имени файла, и в этом же порядке копируются (`⌘C`) и перетаскиваются.
+- Разовое переименование всей открытой папки по времени съёмки (Настройки → Переименование по метаданным → «Разово для всей папки»); пары и XMP — под общим именем, `Z` возвращает все имена.
+- Темы 2.0: «Плёнка», «Жидкое стекло», «Нейтраль» и «Световой стол» вместо «Студии», «Стекла», «Тишины» и «Контакта» (выбранная тема переходит сама: «Студия» → «Нейтраль», «Тишина» → «Световой стол», «Контакт» → «Плёнка»). Подсказки клавиш подписаны папками.
+- Окно настроек из шести страниц; каждая функция включается отдельно (перенос по папкам, звёзды, цвета, флаги, умный отбор, сравнение, рисование, сведения), три режима расставляют их разом. Звёзды и цвета раньше включались одним флагом: если он стоял, включены оба.
+- Флаги: `⌥P` — оставить, `⌥X` — отклонить, `⌥U` — снять; отклонённые кадры в сетке приглушены, в фильтре — «Оставлено», «Отклонено», «Без флага»; в XMP отклонённый кадр получает `xmp:Rating="-1"`.
+- `H` прячет панели просмотра в любой теме; автоскрытие через 2 с — настройка (по умолчанию выключено).
+- Движение только там, где оно помогает: кадр вырастает из сетки (240 мс), панель сведений выезжает; листание, перенос клавишами и подтверждение — мгновенно или проявлением на месте. Учитывается «Уменьшить движение».
+- «Нейтраль»: фон под фото в просмотре выбирается в панели сведений (пять серых).
+- Правый клик по кадру в сетке и в просмотре: «Открыть в Просмотре», «Открыть в» (любая программа, которая открывает файл, RAW пары отдельно, или другая программа), «Отправить по AirDrop» (с RAW или без). Правки, сохранённые в другой программе, подхватываются, когда возвращаетесь в PhotoChoice.
+- Простая коррекция в просмотре (`E`): экспозиция, контраст, светлые, тени, белые, чёрные, температура, оттенок, красочность, насыщенность. `\` — до / после, `Z` отменяет последнее движение ползунка, двойной клик по названию сбрасывает его. Оригинал не меняется; `⌘S` сохраняет копию JPEG в полном разрешении с EXIF исходника (RAW проявляется заново). Выключается в Настройках → «Функции».
+- Сетка: панели сведений и калибровки выезжают поверх сетки, а не раздвигают её; сетка перестраивается один раз и без анимации — на `I` в больших папках больше не дёргается.
+- Поиск по имени файла над сеткой (`⌘F`): несколько слов — все должны быть в имени (учитывается и RAW пары), `4810-4830` — кадры с номерами из диапазона; `Esc` очищает. Просмотр листает только найденное.
+- Производительность: количество одновременных операций анализа и загрузки изображений зависит от нагрева Mac и режима энергосбережения. При критическом нагреве фоновый анализ приостанавливается до охлаждения. Оценки MobileCLIP рассчитываются только для новых записей, сокращены повторные вычисления и расход памяти при группировке серий и людей, устаревшие запросы загрузки отменяются. Формат кэша и правила брака сохранены.
+
 ## 1.4.1 — 2026-10-21
 
 ### English

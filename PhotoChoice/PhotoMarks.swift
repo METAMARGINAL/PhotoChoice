@@ -3,7 +3,7 @@ import Foundation
 import Observation
 import SwiftUI
 
-// Звёзды и цветовые метки (настройка `marksEnabled`, по умолчанию выкл.).
+// Звёзды, цветовые метки и флаги (функции `featureStars`, `featureColors`, `featureFlags`, по умолчанию выкл.).
 // Хранятся у приложения (Application Support/PhotoChoice/marks.json) по пути файла и переезжают вместе с кадром.
 // Рядом с фото пишутся только по команде «Записать в XMP»: `DSCF0001.xmp`, сами снимки не меняются.
 
@@ -74,14 +74,63 @@ nonisolated struct PhotoMark: Codable, Equatable, Sendable {
     var rating = 0
     /// 0 — без цвета, иначе `ColorClass.rawValue`
     var color = 0
+    /// 0 — без флага, 1 — оставить, 2 — отклонить
+    var flag = 0
 
-    var isEmpty: Bool { rating == 0 && color == 0 }
+    var isEmpty: Bool { rating == 0 && color == 0 && flag == 0 }
+
+    init(rating: Int = 0, color: Int = 0, flag: Int = 0) {
+        self.rating = rating
+        self.color = color
+        self.flag = flag
+    }
+
+    // Старые marks.json без флагов остаются валидными
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rating = try container.decodeIfPresent(Int.self, forKey: .rating) ?? 0
+        color = try container.decodeIfPresent(Int.self, forKey: .color) ?? 0
+        flag = try container.decodeIfPresent(Int.self, forKey: .flag) ?? 0
+    }
 }
 
-/// ⌥0–⌥5 — звёзды, ⌃0–⌃8 — цвет. 1–9 без модификаторов остаются за переносом в папки
+/// Флаг кадра
+nonisolated enum PhotoFlag: Int, CaseIterable, Sendable {
+    case off = 0, pick, reject
+
+    var title: String {
+        switch self {
+        case .off: "Без флага"
+        case .pick: "Оставить"
+        case .reject: "Отклонить"
+        }
+    }
+
+    var key: String {
+        switch self {
+        case .off: "⌥U"
+        case .pick: "⌥P"
+        case .reject: "⌥X"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .off: "flag"
+        case .pick: "flag.fill"
+        case .reject: "flag.slash.fill"
+        }
+    }
+}
+
+/// ⌥0–⌥5 — звёзды, ⌃0–⌃8 — цвет, ⌥P / ⌥X / ⌥U — флаг. 1–9 без модификаторов остаются за переносом в папки
 enum MarkCommand {
     case rating(Int)
     case color(Int)
+    case flag(Int)
+
+    /// P, X, U по кодам клавиш
+    private static let flagKeys: [UInt16: Int] = [35: 1, 7: 2, 32: 0]
 
     /// Цифры по кодам клавиш — не зависят от раскладки; верхний ряд и цифровой блок
     private static let digits: [UInt16: Int] = [
@@ -90,14 +139,27 @@ enum MarkCommand {
     ]
 
     init?(_ event: NSEvent) {
-        guard MarkStore.isEnabled, let digit = Self.digits[event.keyCode] else { return nil }
-        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        if flags == .option, digit <= 5 {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if modifiers == .option, Feature.flags.isOn, let flag = Self.flagKeys[event.keyCode] {
+            self = .flag(flag)
+            return
+        }
+        guard let digit = Self.digits[event.keyCode] else { return nil }
+        if modifiers == .option, digit <= 5, Feature.stars.isOn {
             self = .rating(digit)
-        } else if flags == .control, digit <= ColorClass.allCases.count {
+        } else if modifiers == .control, digit <= ColorClass.allCases.count, Feature.colors.isOn {
             self = .color(digit)
         } else {
             return nil
+        }
+    }
+
+    /// Функция этой команды включена
+    var isAllowed: Bool {
+        switch self {
+        case .rating: Feature.stars.isOn
+        case .color: Feature.colors.isOn
+        case .flag: Feature.flags.isOn
         }
     }
 
@@ -105,6 +167,7 @@ enum MarkCommand {
         switch self {
         case .rating(let n): "⌥\(n)"
         case .color(let n): "⌃\(n)"
+        case .flag(let n): (PhotoFlag(rawValue: n) ?? .off).key
         }
     }
 
@@ -112,24 +175,42 @@ enum MarkCommand {
         switch self {
         case .rating(let n): n == 0 ? "Без звёзд" : String(repeating: "★", count: n)
         case .color(let n): ColorClass(rawValue: n)?.title ?? "Без цвета"
+        case .flag(let n): (PhotoFlag(rawValue: n) ?? .off).title
         }
     }
 }
 
-/// Фильтр сетки: число звёзд из `ratings` и цвет из `colors` (пусто — любые; 0 — без звёзд / без цвета)
+/// Фильтр сетки: число звёзд из `ratings`, цвет из `colors`, флаг из `flags`
+/// (пусто — любые; 0 — без звёзд / без цвета / без флага). Выключенная функция в фильтре не участвует
 struct MarkFilter: Equatable {
     var ratings: Set<Int> = []
     var colors: Set<Int> = []
+    var flags: Set<Int> = []
 
-    var isActive: Bool { !ratings.isEmpty || !colors.isEmpty }
+    /// Только включённые функции
+    var effective: MarkFilter {
+        MarkFilter(
+            ratings: Feature.stars.isOn ? ratings : [],
+            colors: Feature.colors.isOn ? colors : [],
+            flags: Feature.flags.isOn ? flags : []
+        )
+    }
+
+    var isActive: Bool {
+        let e = effective
+        return !e.ratings.isEmpty || !e.colors.isEmpty || !e.flags.isEmpty
+    }
 
     func matches(_ mark: PhotoMark) -> Bool {
-        (ratings.isEmpty || ratings.contains(mark.rating)) && (colors.isEmpty || colors.contains(mark.color))
+        let e = effective
+        return (e.ratings.isEmpty || e.ratings.contains(mark.rating))
+            && (e.colors.isEmpty || e.colors.contains(mark.color))
+            && (e.flags.isEmpty || e.flags.contains(mark.flag))
     }
 
     /// «★2», «★3+», «★2, 4» — выбранные звёзды для кнопки фильтра
     private var ratingSummary: String? {
-        let sorted = ratings.sorted()
+        let sorted = effective.ratings.sorted()
         guard let low = sorted.first else { return nil }
         if sorted.count == 1 {
             return low == 0 ? "Без звёзд" : "★\(low)"
@@ -142,12 +223,18 @@ struct MarkFilter: Equatable {
 
     /// «★3+ · 2 цвета» для кнопки фильтра
     var summary: String {
+        let e = effective
         var parts: [String] = []
         if let ratingSummary { parts.append(ratingSummary) }
-        if colors.count == 1, let only = colors.first {
+        if e.colors.count == 1, let only = e.colors.first {
             parts.append(ColorClass(rawValue: only)?.title ?? "Без цвета")
-        } else if colors.count > 1 {
-            parts.append("\(colors.count) \(PhotoSession.plural(colors.count, "цвет", "цвета", "цветов"))")
+        } else if e.colors.count > 1 {
+            parts.append("\(e.colors.count) \(PhotoSession.plural(e.colors.count, "цвет", "цвета", "цветов"))")
+        }
+        if e.flags.count == 1, let only = e.flags.first {
+            parts.append((PhotoFlag(rawValue: only) ?? .off).title)
+        } else if e.flags.count > 1 {
+            parts.append("\(e.flags.count) флага")
         }
         return parts.isEmpty ? "Фильтр" : parts.joined(separator: " · ")
     }
@@ -159,9 +246,9 @@ struct MarkFilter: Equatable {
 final class MarkStore {
     static let shared = MarkStore()
 
-    /// Настройка «Звёзды и цветовые метки»
+    /// Включена хотя бы одна из функций: звёзды, цвета, флаги
     static var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "marksEnabled")
+        Feature.stars.isOn || Feature.colors.isOn || Feature.flags.isOn
     }
 
     /// Путь файла → оценка; кадров без оценки здесь нет
@@ -178,6 +265,10 @@ final class MarkStore {
 
     func setColor(_ urls: [URL], _ color: Int) {
         update(urls) { $0.color = color }
+    }
+
+    func setFlag(_ urls: [URL], _ flag: Int) {
+        update(urls) { $0.flag = flag }
     }
 
     /// Отмена: кадрам возвращаются прежние звёзды и цвет
@@ -254,11 +345,12 @@ final class MarkStore {
     /// у кадра без оценки, но с XMP звёзды и цвет из XMP убираются
     func exportXMP(_ photos: [URL]) async -> (written: Int, failed: Int) {
         let items = photos.map { (url: $0, mark: mark($0)) }
+        let parts = XMPSidecar.Parts(stars: Feature.stars.isOn, colors: Feature.colors.isOn, flags: Feature.flags.isOn)
         return await Task.detached(priority: .userInitiated) {
             var written = 0
             var failed = 0
             for item in items {
-                switch XMPSidecar.write(item.mark, for: item.url) {
+                switch XMPSidecar.write(item.mark, for: item.url, parts: parts) {
                 case .written: written += 1
                 case .failed: failed += 1
                 case .skipped: break
@@ -276,6 +368,13 @@ nonisolated enum XMPSidecar {
 
     nonisolated enum Outcome: Sendable {
         case written, skipped, failed
+    }
+
+    /// Что писать: выключенная функция свои поля в файле не трогает
+    nonisolated struct Parts: Sendable {
+        var stars: Bool
+        var colors: Bool
+        var flags: Bool
     }
 
     /// `DSCF0001.RAF` → `DSCF0001.xmp`: у пары RAW + JPEG файл общий
@@ -296,24 +395,33 @@ nonisolated enum XMPSidecar {
     """
 
     /// Меняет только звёзды и цвет, остальное в существующем файле остаётся.
+    /// «Отклонить» — `xmp:Rating="-1"`, как у Bridge и Lightroom (вместо звёзд); «оставить» стандартного поля не имеет.
     /// Файл, который не удалось разобрать, не перезаписывается
-    static func write(_ mark: PhotoMark, for photo: URL) -> Outcome {
+    static func write(_ mark: PhotoMark, for photo: URL, parts: Parts) -> Outcome {
         let file = url(for: photo)
+        let rejected = parts.flags && mark.flag == PhotoFlag.reject.rawValue
+        let writesRating = parts.stars || rejected
+        let rating: String? = rejected ? "-1" : (mark.rating > 0 ? "\(mark.rating)" : nil)
+        let label = parts.colors ? ColorClass(rawValue: mark.color)?.label : nil
+        let hasValue = (writesRating && rating != nil) || label != nil
         let document: XMLDocument
         if FileManager.default.fileExists(atPath: file.path) {
             guard let parsed = try? XMLDocument(contentsOf: file, options: [.nodePreserveAll]) else { return .failed }
             document = parsed
         } else {
-            guard !mark.isEmpty else { return .skipped }
+            guard hasValue else { return .skipped }
             guard let fresh = try? XMLDocument(xmlString: template, options: [.nodePreserveAll]) else { return .failed }
             document = fresh
         }
         let descriptions = ((try? document.nodes(forXPath: "//*[local-name()='RDF']/*[local-name()='Description']")) ?? [])
             .compactMap { $0 as? XMLElement }
         guard let first = descriptions.first else { return .failed }
-        let color = ColorClass(rawValue: mark.color)
-        set(first, in: descriptions, name: "Rating", uri: xmpNS, prefix: "xmp", value: mark.rating > 0 ? "\(mark.rating)" : nil)
-        set(first, in: descriptions, name: "Label", uri: xmpNS, prefix: "xmp", value: color?.label)
+        if writesRating {
+            set(first, in: descriptions, name: "Rating", uri: xmpNS, prefix: "xmp", value: rating)
+        }
+        if parts.colors {
+            set(first, in: descriptions, name: "Label", uri: xmpNS, prefix: "xmp", value: label)
+        }
         do {
             try document.xmlData(options: [.nodePrettyPrint]).write(to: file, options: .atomic)
             return .written
@@ -356,7 +464,8 @@ nonisolated enum XMPSidecar {
 
 // MARK: - Вид
 
-/// Цвет и звёзды кадра, по ним можно кликнуть. Клик по уже поставленной звезде снимает звёзды
+/// Флаг, цвет и звёзды кадра, по ним можно кликнуть. Клик по уже поставленной звезде снимает звёзды.
+/// Показывается только то, что включено в настройках
 struct MarkEditor: View {
     let mark: PhotoMark
     var size: CGFloat = 10
@@ -364,21 +473,45 @@ struct MarkEditor: View {
     var showsEmpty = true
     let onRating: (Int) -> Void
     let onColor: (Int) -> Void
+    var onFlag: (Int) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
+    @AppStorage(Feature.stars.key) private var starsOn = false
+    @AppStorage(Feature.colors.key) private var colorsOn = false
+    @AppStorage(Feature.flags.key) private var flagsOn = false
     @State private var hoverStar: Int?
     @State private var picking = false
 
     var body: some View {
         HStack(spacing: size * 0.4) {
-            if showsEmpty || mark.color > 0 {
+            if flagsOn && (showsEmpty || mark.flag > 0) {
+                flagButton
+            }
+            if colorsOn && (showsEmpty || mark.color > 0) {
                 colorButton
             }
-            if showsEmpty || mark.rating > 0 {
+            if starsOn && (showsEmpty || mark.rating > 0) {
                 stars
             }
         }
         .fixedSize()
+    }
+
+    /// Клик: без флага → оставить → отклонить → без флага
+    private var flagButton: some View {
+        let flag = PhotoFlag(rawValue: mark.flag) ?? .off
+        let next = (mark.flag + 1) % 3
+        return Button {
+            onFlag(next)
+        } label: {
+            Image(systemName: flag.symbol)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(flag == .off ? theme.c.text3 : (flag == .reject ? theme.c.danger : theme.c.text1))
+                .frame(width: size + 6, height: size + 6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(flag == .off ? "Флаг: оставить (⌥P), отклонить (⌥X)" : "\(flag.title). Снять — ⌥U")
     }
 
     private var stars: some View {
@@ -468,12 +601,13 @@ struct MarkEditor: View {
     }
 }
 
-/// Подсказка клавиш в нижней строке
+/// Подсказка клавиш в нижней строке: только включённое
 enum MarkHints {
-    static var group: HintGroup {
-        HintGroup(title: "Оценка", hints: [
-            Hint("⌥1–5", label: "звёзды"),
-            Hint("⌃1–8", label: "цвет")
-        ])
+    static var group: HintGroup? {
+        var hints: [Hint] = []
+        if Feature.stars.isOn { hints.append(Hint("⌥1–5", label: "звёзды")) }
+        if Feature.colors.isOn { hints.append(Hint("⌃1–8", label: "цвет")) }
+        if Feature.flags.isOn { hints.append(Hint("⌥P", "⌥X", label: "флаг")) }
+        return hints.isEmpty ? nil : HintGroup(title: "Оценка", hints: hints)
     }
 }

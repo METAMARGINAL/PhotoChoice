@@ -10,13 +10,26 @@ struct GridView: View {
     @State private var gridWidth: CGFloat = 0
     /// Выделенные кадры (⌘A, ⌘‑клик, ⇧‑клик) — для копирования; текущий кадр — session.index
     @State private var selection: Set<URL> = []
-    @AppStorage("marksEnabled") private var marksEnabled = false
+    @AppStorage(Pref.smartAnalysis) private var smartAnalysis = true
+    @AppStorage(Feature.stars.key) private var starsOn = false
+    @AppStorage(Feature.colors.key) private var colorsOn = false
+    @AppStorage(Feature.flags.key) private var flagsOn = false
+    @AppStorage(Feature.transfer.key) private var transferOn = true
+    @AppStorage(Feature.compare.key) private var compareOn = true
+    @AppStorage(Feature.info.key) private var infoOn = true
+    @AppStorage(Pref.sortByCaptureDate) private var sortByCaptureDate = false
     @State private var showMarkFilter = false
+    @FocusState private var searchFocused: Bool
 
     private let defaultSize: CGFloat = 230
 
+    private var marksOn: Bool { starsOn || colorsOn || flagsOn }
+
     private var spacing: CGFloat { theme.gridGap }
-    private var padding: CGFloat { max(theme.gridGap, 8) }
+    private var padding: CGFloat { theme.gridPadding }
+    /// У «Стекла» сетка уходит под капсулы: первому ряду нужен отступ сверху
+    private var topInset: CGFloat { theme.isGlass ? 70 : (theme.isFilm ? 10 : 0) }
+    private var bottomInset: CGFloat { theme.isGlass ? theme.hintbarReserve + 8 : 0 }
 
     /// Число колонок считаем сами, чтобы стрелки ↑↓ прыгали ровно на строку
     private var columnCount: Int {
@@ -26,48 +39,28 @@ struct GridView: View {
     }
 
     var body: some View {
-        let c = theme.c
-        VStack(spacing: 0) {
-            topbar
-            HStack(spacing: 0) {
-                grid
-                if session.showCalibration && session.sectionsAvailable {
-                    CalibrationPanel(session: session)
-                        .padding(theme.isGlass ? 12 : 0)
-                        .transition(.move(edge: .trailing))
-                }
-                if session.showInfo, let url = session.currentPhoto {
-                    InfoPanel(url: url, companions: session.companions(of: url))
-                        .padding(theme.isGlass ? 12 : 0)
-                        .transition(.move(edge: .trailing))
-                }
+        Group {
+            if theme.isGlass {
+                glassLayout
+            } else {
+                stackLayout
             }
-            HintBar(groups: [
-                HintGroup(title: "Выбор", hints: [
-                    Hint("←", "→", "↑", "↓", label: "кадр"),
-                    Hint("↩", label: "просмотр"),
-                    Hint("⌘A", label: "все"),
-                    Hint("⌘C", label: "копировать")
-                ]),
-                HintGroup(title: "Отбор", hints: [
-                    Hint("1–9", label: "в папку"),
-                    Hint("⌫", label: "корзина"),
-                    Hint("Z", label: "отмена")
-                ])
-            ] + (marksEnabled ? [MarkHints.group] : []) + [
-                HintGroup(title: "Вид", hints: [
-                    Hint("I", label: "инфо"),
-                    Hint("C", label: "сравнить"),
-                    Hint("Esc", label: "выйти")
-                ])
-            ])
         }
-        .background(theme.isContact ? c.canvas : c.app)
+        .background { gridBackground }
         .overlay { ToastOverlay(toast: session.toast) }
         .onChange(of: session.section) { _, _ in
             selection = []
         }
-        .onChange(of: marksEnabled) { _, _ in
+        .onChange(of: searchFocused) { _, focused in
+            session.isEditingText = focused
+        }
+        .onDisappear {
+            session.isEditingText = false
+        }
+        .onChange(of: sortByCaptureDate) { _, _ in
+            session.applySortOrder()
+        }
+        .onChange(of: [starsOn, colorsOn, flagsOn]) { _, _ in
             // Функцию выключили — фильтр не должен прятать кадры без кнопки, которой его снять
             session.markFilter = MarkFilter()
         }
@@ -83,84 +76,185 @@ struct GridView: View {
         )
     }
 
+    @ViewBuilder
+    private var gridBackground: some View {
+        if theme.isTable && theme.isLight {
+            RadialGradient(
+                colors: [Color(hex: 0xFBFBFA), Color(hex: 0xECEBE8)],
+                center: .top, startRadius: 0, endRadius: 1400
+            )
+        } else {
+            theme.c.app
+        }
+    }
+
+    /// Панель, сетка, подсказки одна под другой
+    private var stackLayout: some View {
+        VStack(spacing: 0) {
+            topbar
+            HStack(spacing: 0) {
+                if theme.isNeutral {
+                    NeutralRail(session: session)
+                }
+                grid
+                    .padding(.trailing, sideReserve)
+                    .transaction(value: sideReserve) { $0.animation = nil }
+            }
+            .overlay(alignment: .trailing) { sidePanels }
+            HintBar(groups: hintGroups)
+        }
+    }
+
+    private var showsCalibration: Bool {
+        session.showCalibration && session.sectionsAvailable
+    }
+
+    private var showsInfoPanel: Bool {
+        infoOn && session.showInfo && session.currentPhoto != nil
+    }
+
+    /// Место под панели справа. Сетка перестраивается один раз и без анимации: панель выезжает поверх,
+    /// а не сдвигает сотни ячеек на каждом кадре движения
+    private var sideReserve: CGFloat {
+        let glassPad: CGFloat = theme.isGlass ? 24 : 0
+        return (showsCalibration ? CalibrationPanel.width + glassPad : 0) + (showsInfoPanel ? theme.panelWidth + glassPad : 0)
+    }
+
+    /// «Стекло»: кадры на весь экран, управление в капсулах поверх
+    private var glassLayout: some View {
+        HStack(spacing: 0) {
+            ZStack(alignment: .top) {
+                grid
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [Color.black.opacity(0.62), .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 96)
+                    Spacer(minLength: 0)
+                    LinearGradient(colors: [.clear, Color.black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 120)
+                }
+                .opacity(theme.isLight ? 0.25 : 1)
+                .allowsHitTesting(false)
+                VStack(spacing: 0) {
+                    topbar
+                    Spacer(minLength: 0)
+                    HintBar(groups: hintGroups)
+                }
+            }
+            .padding(.trailing, sideReserve)
+            .transaction(value: sideReserve) { $0.animation = nil }
+        }
+        .overlay(alignment: .trailing) { sidePanels }
+    }
+
+    private var sidePanels: some View {
+        HStack(spacing: 0) {
+            if showsCalibration {
+                CalibrationPanel(session: session)
+                    .padding(theme.isGlass ? 12 : 0)
+                    .transition(.move(edge: .trailing))
+            }
+            if showsInfoPanel, let url = session.currentPhoto {
+                InfoPanel(url: url, companions: session.companions(of: url), revision: session.editRevision)
+                    .padding(theme.isGlass ? 12 : 0)
+                    .transition(.move(edge: .trailing))
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private var hintGroups: [HintGroup] {
+        var view = [Hint("←", "→", "↑", "↓", label: "выбрать"), Hint("F", label: "открыть")]
+        if infoOn { view.append(Hint("I", label: "сведения")) }
+        if compareOn { view.append(Hint("C", label: "сравнить")) }
+        view.append(Hint("Z", label: "отменить"))
+        view.append(Hint("⌘C", label: "копировать"))
+        view.append(Hint("⌘F", label: "поиск"))
+        var groups = [HintGroup.targets(session), HintGroup(title: "Вид", hints: view)]
+        if let marks = MarkHints.group {
+            groups.append(marks)
+        }
+        return groups
+    }
+
     // MARK: - Верхняя панель
 
     private var topbar: some View {
         let c = theme.c
-        return HStack(spacing: 12) {
+        return HStack(spacing: theme.isGlass ? 10 : 14) {
             capsuleGroup {
                 Button {
                     session.stopReview()
                 } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 6) {
                         Image(systemName: "chevron.left")
                         Text("Выйти")
                     }
                 }
-                .buttonStyle(PCButtonStyle(kind: .ghost))
+                .buttonStyle(PCButtonStyle(kind: theme.isGlass ? .ghost : .secondary))
                 .help("К выбору папки (Esc)")
             }
 
-            if theme.isStudio || theme.isContact {
-                Rectangle().fill(c.line).frame(width: 1, height: 16)
-            }
-
             capsuleGroup(text: true) {
-                HStack(spacing: 12) {
-                    Text(session.sourceURL?.lastPathComponent ?? "")
-                        .font(folderFont)
-                        .foregroundStyle(theme.isQuiet ? c.text2 : c.text1)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    counter
-                    if !selection.isEmpty {
-                        Text("выбрано \(selection.count)")
-                            .font(theme.numFont)
-                            .foregroundStyle(c.accent)
+                VStack(alignment: .leading, spacing: 1) {
+                    titleBlock
+                    if smartAnalysis && analysis.isRunning && session.section == .all {
+                        Text(analysis.progressText)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(c.text2)
                     }
                 }
             }
 
-            if session.sectionsAvailable {
+            if session.sectionsAvailable && !theme.isNeutral {
                 capsuleGroup {
                     sectionSwitcher
                 }
             }
 
-            if marksEnabled {
-                capsuleGroup {
+            if marksOn {
+                capsuleGroup(text: true) {
                     markFilterMenu
                 }
+            }
+
+            capsuleGroup(text: true) {
+                searchField
             }
 
             Spacer(minLength: 12)
 
             capsuleGroup {
                 HStack(spacing: 6) {
-                    Button {
-                        session.startCompare()
-                    } label: {
-                        HStack(spacing: 6) {
+                    if compareOn {
+                        Button {
+                            session.startCompare()
+                        } label: {
                             Image(systemName: "arrow.left.arrow.right")
-                            Text("Сравнить")
-                            KeyCap("C", size: .small)
                         }
+                        .buttonStyle(PCIconButtonStyle())
+                        .help("Сравнить выбранный кадр с соседним (C)")
                     }
-                    .buttonStyle(PCButtonStyle(kind: .ghost))
-                    .help("Сравнить выбранный кадр с соседним")
 
                     if session.sectionsAvailable {
                         Button {
-                            withAnimation(.easeOut(duration: 0.2)) { session.showCalibration.toggle() }
+                            withAnimation(.easeOut(duration: 0.22)) { session.showCalibration.toggle() }
                         } label: {
                             Image(systemName: "slider.horizontal.3")
                         }
                         .buttonStyle(PCIconButtonStyle(isOn: session.showCalibration))
                         .help("Калибровка брака (⌥⌘K)")
                     }
+                }
+            }
 
+            capsuleGroup(text: true) {
+                zoomSlider
+            }
+
+            if infoOn {
+                capsuleGroup {
                     Button {
-                        withAnimation(.easeOut(duration: 0.2)) { session.showInfo.toggle() }
+                        withAnimation(.easeOut(duration: 0.22)) { session.showInfo.toggle() }
                     } label: {
                         Image(systemName: "sidebar.right")
                     }
@@ -168,72 +262,150 @@ struct GridView: View {
                     .help("Сведения о снимке (I)")
                 }
             }
+        }
+        .padding(.horizontal, theme.isGlass ? 14 : (theme.isNeutral ? 14 : (theme.isTable ? 32 : 24)))
+        .padding(.top, theme.isGlass ? 14 : 0)
+        .frame(height: theme.topbarHeight + (theme.isGlass ? 14 : 0))
+        .background(theme.isNeutral ? Color(hex: 0x222222) : Color.clear)
+        .foregroundStyle(c.text1)
+    }
 
-            capsuleGroup(text: true) {
-                HStack(spacing: 8) {
-                    Button {
-                        session.setGridSize(session.gridThumbSize / 1.2)
-                    } label: {
-                        Image(systemName: "photo").font(.system(size: 10))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Мельче (−)")
-
-                    Slider(
-                        value: Binding(
-                            get: { session.gridThumbSize },
-                            set: { session.setGridSize($0) }
-                        ),
-                        in: PhotoSession.gridSizeRange
-                    )
-                    .controlSize(.small)
-                    .frame(width: 120)
-                    .help("Размер миниатюр")
-
-                    Button {
-                        session.setGridSize(session.gridThumbSize * 1.2)
-                    } label: {
-                        Image(systemName: "photo").font(.system(size: 15))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Крупнее (+)")
+    /// Поиск по имени файла (⌘F): Return или клик по кадру — обратно к сетке, Esc — очистить
+    private var searchField: some View {
+        let c = theme.c
+        let wide = searchFocused || !session.nameQuery.isEmpty
+        return HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12))
+                .foregroundStyle(session.isSearching ? c.text1 : c.text3)
+            TextField("Поиск по имени", text: $session.nameQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(c.text1)
+                .focused($searchFocused)
+                .frame(width: wide ? 170 : 110)
+                .onSubmit { searchFocused = false }
+                .onExitCommand {
+                    session.nameQuery = ""
+                    searchFocused = false
                 }
-                .foregroundStyle(c.text2)
+            if !session.nameQuery.isEmpty {
+                Button {
+                    session.nameQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(c.text3)
+                }
+                .buttonStyle(.plain)
+                .help("Очистить поиск")
             }
         }
-        .padding(.horizontal, theme.isGlass ? 16 : 12)
-        .padding(.top, theme.isGlass ? 12 : 0)
-        .frame(height: theme.topbarHeight + (theme.isGlass ? 8 : 0))
-        .background(theme.isGlass || theme.isQuiet ? Color.clear : c.surface1)
-        .overlay(alignment: .bottom) {
-            if !theme.isGlass && !theme.isQuiet {
-                Rectangle().fill(c.line).frame(height: 1)
+        .padding(.horizontal, theme.isGlass ? 0 : 9)
+        .frame(height: theme.isGlass ? 44 : (theme.isTable ? 32 : 28))
+        .background {
+            if !theme.isGlass {
+                RoundedRectangle(cornerRadius: min(theme.rControl, 14))
+                    .fill(theme.isTable && theme.isLight ? Color.white : c.surface2)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: min(theme.rControl, 14))
+                            .strokeBorder(searchFocused ? c.lineStrong : (theme.isLight ? c.line : Color.clear), lineWidth: 1)
+                    }
+            }
+        }
+        .contentShape(Rectangle())
+        // Клик мимо текста (по лупе, по краю) — тоже в поле; самому полю клик не мешает
+        .simultaneousGesture(TapGesture().onEnded { searchFocused = true })
+        .help("Поиск по имени файла (⌘F). Любой кусок имени: «6481» найдёт DSCF6481.JPG. Несколько слов — все должны быть в имени, «4810-4830» — номера кадров")
+    }
+
+    /// Название папки и «Кадр 12 из 480»
+    @ViewBuilder
+    private var titleBlock: some View {
+        let c = theme.c
+        let name = session.sourceURL?.lastPathComponent ?? ""
+        if theme.isTable {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name)
+                    .font(.system(size: 20, weight: .semibold))
+                    .tracking(-0.3)
+                    .foregroundStyle(c.text1)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                HStack(spacing: 8) {
+                    counter
+                    selectionCount
+                }
+            }
+        } else {
+            HStack(spacing: 12) {
+                Text(name)
+                    .font(.system(size: theme.isFilm ? 15 : 14, weight: .semibold))
+                    .foregroundStyle(c.text1)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                counter
+                selectionCount
             }
         }
     }
 
-    private var folderFont: Font {
-        switch theme.direction {
-        case .contact: .system(size: 15, weight: .semibold, design: .serif)
-        case .quiet: .system(size: 12)
-        case .studio, .glass: .system(size: 13, weight: .semibold)
+    @ViewBuilder
+    private var selectionCount: some View {
+        if !selection.isEmpty {
+            Text("выбрано \(selection.count)")
+                .font(.system(size: 13).monospacedDigit())
+                .foregroundStyle(theme.isFilm ? theme.c.edge : theme.c.text1)
         }
     }
 
-    /// «12 / 480» — текущий кадр ярче
+    /// «Кадр 12 из 480» — номер ярче
     private var counter: some View {
         let c = theme.c
         let total = session.photos.count
         let current = total == 0 ? 0 : session.index + 1
         return HStack(spacing: 0) {
+            Text("Кадр ")
             Text("\(current)")
                 .fontWeight(.semibold)
-                .foregroundStyle(theme.isContact ? c.edge : c.text1)
-            Text(" / \(total)")
-                .foregroundStyle(theme.isContact ? c.edge : c.text2)
+                .foregroundStyle(c.text1)
+            Text(" из \(total)")
         }
-        .font(theme.numFont)
-        .tracking(theme.isContact ? 0.9 : 0)
+        .font(.system(size: theme.isTable ? 13.5 : 13).monospacedDigit())
+        .foregroundStyle(c.text2)
+        .lineLimit(1)
+    }
+
+    private var zoomSlider: some View {
+        HStack(spacing: 10) {
+            Button {
+                session.setGridSize(session.gridThumbSize / 1.2)
+            } label: {
+                Image(systemName: "rectangle").font(.system(size: 10))
+            }
+            .buttonStyle(.plain)
+            .help("Мельче (−)")
+
+            Slider(
+                value: Binding(
+                    get: { session.gridThumbSize },
+                    set: { session.setGridSize($0) }
+                ),
+                in: PhotoSession.gridSizeRange
+            )
+            .controlSize(.small)
+            .frame(width: theme.isNeutral ? 110 : 120)
+            .help("Размер миниатюр")
+
+            Button {
+                session.setGridSize(session.gridThumbSize * 1.2)
+            } label: {
+                Image(systemName: "rectangle").font(.system(size: 15))
+            }
+            .buttonStyle(.plain)
+            .help("Крупнее (+)")
+        }
+        .foregroundStyle(theme.c.text3)
     }
 
     /// У «Стекла» группы — плавающие стеклянные капсулы; у остальных — просто содержимое
@@ -241,8 +413,8 @@ struct GridView: View {
     private func capsuleGroup<Content: View>(text: Bool = false, @ViewBuilder content: () -> Content) -> some View {
         if theme.isGlass {
             content()
-                .padding(.horizontal, text ? 16 : 6)
-                .frame(height: 40)
+                .padding(.horizontal, text ? 18 : 5)
+                .frame(height: 44)
                 .pcGlass(in: .capsule)
         } else {
             content()
@@ -331,7 +503,7 @@ struct GridView: View {
 
     private var emptySectionNote: String {
         if analysis.isRunning {
-            return "Анализ ещё идёт: \(analysis.done) из \(analysis.total)"
+            return analysis.progressText
         }
         if session.section == .defects {
             return "При строгости «\(analysis.strictness.title)». Строгость меняется в Настройках (⌘,)"
@@ -344,7 +516,42 @@ struct GridView: View {
     }
 
     /// Пустой раздел: не прячем, а объясняем
+    @ViewBuilder
     private var emptySection: some View {
+        let filtered = session.isSearching || session.markFilter.isActive
+        // Серии и плитки людей поиском не фильтруются
+        if filtered && session.section != .series && !(session.section == .people && !session.isPersonOpened) {
+            nothingFound
+        } else {
+            emptySectionContent
+        }
+    }
+
+    /// Поиск или фильтр ничего не оставили
+    private var nothingFound: some View {
+        let c = theme.c
+        let query = session.nameQuery.trimmingCharacters(in: .whitespaces)
+        return VStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(c.text3)
+            Text("Ничего не нашлось")
+                .font(theme.headingFont)
+                .foregroundStyle(c.text1)
+            Text(query.isEmpty ? "Ни один кадр не подходит под фильтр" : "Нет кадров с «\(query)» в имени" + (session.markFilter.isActive ? " и под фильтром" : ""))
+                .font(.system(size: 12))
+                .foregroundStyle(c.text3)
+                .multilineTextAlignment(.center)
+            Button(session.markFilter.isActive && session.isSearching ? "Сбросить поиск и фильтр" : (session.isSearching ? "Сбросить поиск" : "Сбросить фильтр")) {
+                session.nameQuery = ""
+                session.markFilter = MarkFilter()
+            }
+            .buttonStyle(PCButtonStyle())
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptySectionContent: some View {
         let c = theme.c
         return VStack(spacing: 10) {
             Image(systemName: session.section == .defects ? "checkmark.seal"
@@ -397,6 +604,8 @@ struct GridView: View {
                 }
             }
             .padding(padding)
+            .padding(.top, topInset)
+            .padding(.bottom, bottomInset)
         }
     }
 
@@ -427,7 +636,7 @@ struct GridView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, padding)
-        .padding(.top, padding)
+        .padding(.top, padding + topInset)
     }
 
     private var gridContent: some View {
@@ -440,12 +649,14 @@ struct GridView: View {
                     if session.section == .series {
                         seriesList
                     } else {
-                        LazyVGrid(columns: gridColumns, spacing: spacing) {
+                        LazyVGrid(columns: gridColumns, spacing: theme.gridRowGap) {
                             ForEach(Array(session.photos.enumerated()), id: \.element) { item in
                                 cell(item.offset, item.element)
                             }
                         }
                         .padding(padding)
+                        .padding(.top, topInset)
+                        .padding(.bottom, bottomInset)
                     }
                 }
                 .onAppear {
@@ -474,28 +685,36 @@ struct GridView: View {
     /// Ячейка кадра `index` раздела
     private func cell(_ index: Int, _ url: URL) -> some View {
         let best = session.seriesBest(url)
+        let selected = index == session.index || selection.contains(url)
         return GridCell(
             url: url,
             number: index + 1,
-            isSelected: index == session.index || selection.contains(url),
-            compact: session.gridThumbSize < 160 || theme.isQuiet,
+            isSelected: selected,
+            compact: session.gridThumbSize < 160,
             hasNotes: session.hasAnnotations(url),
             extras: session.companions(of: url).map { $0.pathExtension.uppercased() },
             // Значок брака — только в «Все фото»: в разделе «Брак» он у всех
-            defects: session.section == .all ? analysis.defects(for: url) : [],
+            defects: smartAnalysis && session.section == .all ? analysis.defects(for: url) : [],
             label: session.showCalibration ? analysis.label(url) : nil,
             bestNote: best?.bestNote,
             // В «Браке» — причина вместо модели камеры
             reasons: session.section == .defects ? analysis.defects(for: url) : [],
-            mark: marksEnabled ? MarkStore.shared.mark(url) : nil,
+            mark: marksOn ? MarkStore.shared.mark(url) : nil,
+            revision: session.editRevision,
+            adjusted: session.hasAdjustment(url),
             onMark: { session.applyMark($0, to: [url]) }
         )
+        .zIndex(selected ? 1 : 0)
         .id(url)
         .onTapGesture(count: 2) {
+            searchFocused = false
             session.open(index)
         }
         .simultaneousGesture(
-            TapGesture().onEnded { click(index) }
+            TapGesture().onEnded {
+                searchFocused = false
+                click(index)
+            }
         )
         .gesture(
             DragGesture(minimumDistance: 6)
@@ -512,7 +731,7 @@ struct GridView: View {
             ForEach(session.visibleSeries) { block in
                 VStack(alignment: .leading, spacing: 10) {
                     seriesHeader(block)
-                    LazyVGrid(columns: gridColumns, spacing: spacing) {
+                    LazyVGrid(columns: gridColumns, spacing: theme.gridRowGap) {
                         ForEach(block.range, id: \.self) { i in
                             if session.photos.indices.contains(i) {
                                 cell(i, session.photos[i])
@@ -525,6 +744,8 @@ struct GridView: View {
             }
         }
         .padding(padding)
+        .padding(.top, topInset)
+        .padding(.bottom, bottomInset)
     }
 
     private func seriesHeader(_ block: SeriesBlock) -> some View {
@@ -545,7 +766,7 @@ struct GridView: View {
                 .focusable(false)
             }
             Text("Серия \(block.number)")
-                .font(theme.isContact ? .system(size: 14, weight: .semibold, design: .serif) : .system(size: 13, weight: .semibold))
+                .font(theme.isFilm ? Theme.condensed(17) : .system(size: 13, weight: .semibold))
                 .foregroundStyle(c.text1)
             Text(seriesDetails(block))
                 .font(.system(size: 12).monospacedDigit())
@@ -562,9 +783,7 @@ struct GridView: View {
         }
         .padding(.bottom, 2)
         .overlay(alignment: .bottom) {
-            if !theme.isQuiet {
-                Rectangle().fill(c.line).frame(height: 1).offset(y: 5)
-            }
+            Rectangle().fill(c.line).frame(height: 1).offset(y: 5)
         }
     }
 
@@ -597,13 +816,8 @@ struct GridView: View {
             }
             return
         }
-        if animated {
-            withAnimation(.easeOut(duration: 0.15)) {
-                proxy.scrollTo(url, anchor: anchor)
-            }
-        } else {
-            proxy.scrollTo(url, anchor: anchor)
-        }
+        // Без анимации: при отборе ноутбук декодирует кадры, а не рисует переходы
+        proxy.scrollTo(url, anchor: anchor)
     }
 
     // MARK: - Выбор и копирование
@@ -691,28 +905,43 @@ struct GridView: View {
             NSWorkspace.shared.activateFileViewerSelecting(files(of: urls))
         }
         Divider()
+        FileActionsMenu(session: session, photos: urls)
+        Divider()
         Button("Открыть") {
             session.open(index)
         }
         Button("Выбрать все") {
             selectAll()
         }
-        if marksEnabled {
+        if marksOn {
             Divider()
-            Menu("Звёзды") {
-                ForEach(0...5, id: \.self) { n in
-                    Button(n == 0 ? "Без звёзд (⌥0)" : "\(String(repeating: "★", count: n)) (⌥\(n))") {
-                        session.applyMark(.rating(n), to: urls)
+            if starsOn {
+                Menu("Звёзды") {
+                    ForEach(0...5, id: \.self) { n in
+                        Button(n == 0 ? "Без звёзд (⌥0)" : "\(String(repeating: "★", count: n)) (⌥\(n))") {
+                            session.applyMark(.rating(n), to: urls)
+                        }
                     }
                 }
             }
-            Menu("Цвет") {
-                Button("Без цвета (⌃0)") { session.applyMark(.color(0), to: urls) }
-                ForEach(ColorClass.allCases) { color in
-                    Button {
-                        session.applyMark(.color(color.rawValue), to: urls)
-                    } label: {
-                        Label { Text("\(color.title) (⌃\(color.rawValue))") } icon: { Image(nsImage: color.menuDot) }
+            if colorsOn {
+                Menu("Цвет") {
+                    Button("Без цвета (⌃0)") { session.applyMark(.color(0), to: urls) }
+                    ForEach(ColorClass.allCases) { color in
+                        Button {
+                            session.applyMark(.color(color.rawValue), to: urls)
+                        } label: {
+                            Label { Text("\(color.title) (⌃\(color.rawValue))") } icon: { Image(nsImage: color.menuDot) }
+                        }
+                    }
+                }
+            }
+            if flagsOn {
+                Menu("Флаг") {
+                    ForEach([PhotoFlag.pick, .reject, .off], id: \.rawValue) { flag in
+                        Button("\(flag.title) (\(flag.key))") {
+                            session.applyMark(.flag(flag.rawValue), to: urls)
+                        }
                     }
                 }
             }
@@ -756,6 +985,9 @@ struct GridView: View {
             case 8: // ⌘C — скопировать файлы
                 copyFiles(currentTargets)
                 return true
+            case 3: // ⌘F — поиск по имени
+                searchFocused = true
+                return true
             default:
                 break
             }
@@ -788,9 +1020,11 @@ struct GridView: View {
         case 3, 36, 76: // F, Return, Enter — открыть фото
             session.open(session.index)
         case 8: // C — сравнение
+            guard compareOn else { return false }
             session.startCompare()
         case 34: // I — сведения
-            withAnimation(.easeOut(duration: 0.2)) { session.showInfo.toggle() }
+            guard infoOn else { return false }
+            withAnimation(.easeOut(duration: 0.22)) { session.showInfo.toggle() }
         case 123: // ←
             session.select(session.index - 1)
         case 124, 49: // →, пробел
@@ -813,9 +1047,11 @@ struct GridView: View {
             session.select(last)
         case 51, 117: // Delete
             session.trashCurrent()
-        case 53: // Esc — сначала снять выделение, потом закрыть серию, потом выйти
+        case 53: // Esc — сначала снять выделение и поиск, потом закрыть серию, потом выйти
             if !selection.isEmpty {
                 selection = []
+            } else if session.isSearching {
+                session.nameQuery = ""
             } else if session.isSeriesOpened {
                 session.closeSeries()
             } else if session.isPersonOpened {
@@ -851,113 +1087,271 @@ private struct GridCell: View {
     var bestNote: String? = nil
     /// Причины брака для подписи (только в разделе «Брак»)
     var reasons: [Defect] = []
-    /// Звёзды и цвет; nil — функция выключена
+    /// Звёзды, цвет и флаг; nil — функции выключены
     var mark: PhotoMark? = nil
+    /// `session.editRevision`: кадр сохранили в другой программе — перечитать миниатюру
+    var revision = 0
+    /// Есть коррекция ползунками (миниатюра — без неё)
+    var adjusted = false
     var onMark: (MarkCommand) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @State private var thumbnail: Thumbnail?
     @State private var hovered = false
 
+    /// Отклонённый флагом кадр приглушён
+    private var rejected: Bool { mark?.flag == PhotoFlag.reject.rawValue }
+
     var body: some View {
-        let c = theme.c
         let thumb = thumbnail ?? ThumbnailLoader.cached(url)
-        let shape = RoundedRectangle(cornerRadius: theme.rMd)
-
-        VStack(alignment: .leading, spacing: 0) {
-            if theme.isContact {
-                // Номер кадра, как на контактном листе
-                Text("\(number)")
-                    .font(theme.edgeFont)
-                    .foregroundStyle(c.text3)
-                    .lineLimit(1)
-                    .frame(height: 14)
+        Group {
+            switch theme.direction {
+            case .film: filmCell(thumb)
+            case .glass: glassCell(thumb)
+            case .neutral: neutralCell(thumb)
+            case .table: tableCell(thumb)
             }
-
-            thumbArea(thumb)
-
-            caption(thumb?.info)
-                .padding(.top, theme.isQuiet ? 6 : 8)
         }
-        .padding(cellPadding)
-        .background(cellFill, in: shape)
-        .overlay { selectionMark(shape) }
-        .shadow(color: glow, radius: isSelected && theme.isGlass ? 4 : 0)
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
-        .task(id: url) {
-            guard thumbnail == nil else { return }
+        .task(id: "\(url.path)#\(revision)") {
+            guard thumbnail == nil || ThumbnailLoader.cached(url) == nil else { return }
             if let loaded = await ThumbnailLoader.load(url), !Task.isCancelled {
                 thumbnail = loaded
             }
         }
     }
 
-    private var cellPadding: EdgeInsets {
-        switch theme.direction {
-        case .studio: EdgeInsets(top: 10, leading: 10, bottom: 8, trailing: 10)
-        case .glass: EdgeInsets(top: 12, leading: 12, bottom: 10, trailing: 12)
-        case .quiet: EdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
-        case .contact: EdgeInsets(top: 4, leading: 6, bottom: 6, trailing: 6)
-        }
-    }
+    // MARK: Темы
 
-    private var cellFill: Color {
+    /// «Плёнка»: кадр на ленте, снизу край плёнки — номер и имя файла; выбранный обведён карандашом
+    private func filmCell(_ thumb: Thumbnail?) -> some View {
         let c = theme.c
-        // Цветовая метка — подложка ячейки; выделение важнее
-        if !isSelected, let color = mark.flatMap({ ColorClass(rawValue: $0.color) }) {
-            return color.color.opacity(hovered ? 0.3 : 0.22)
+        return VStack(alignment: .leading, spacing: 0) {
+            picture(thumb)
+                .padding(.horizontal, 8)
+                .padding(.top, 8)
+            HStack(spacing: 7) {
+                Text("\(number)")
+                    .font(theme.edgeFont)
+                    .tracking(0.75)
+                    .foregroundStyle(hovered ? Color(hex: 0xF6BB61) : c.edge)
+                Spacer(minLength: 4)
+                if let mark {
+                    markEditor(mark)
+                }
+                if hasNotes {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(c.text3)
+                        .help("Есть пометки")
+                }
+                Text(url.deletingPathExtension().lastPathComponent)
+                    .font(Theme.condensed(14, .medium))
+                    .tracking(0.4)
+                    .foregroundStyle(isSelected ? c.text1 : c.text3)
+                    .truncationMode(.middle)
+                if !extras.isEmpty {
+                    Text("+" + extras.joined(separator: "+"))
+                        .font(Theme.condensed(12, .medium))
+                        .foregroundStyle(c.text3)
+                        .help("Кадр снят в нескольких форматах; переносится целиком")
+                }
+            }
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .frame(height: 30)
+            if !reasons.isEmpty {
+                reasonLine
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 6)
+            }
         }
-        switch theme.direction {
-        case .studio:
-            return isSelected ? c.selectionFill : (hovered ? c.surface1 : .clear)
-        case .glass:
-            return isSelected ? c.selectionFill : (hovered ? c.surface2 : c.surface1)
-        case .quiet:
-            return hovered && !isSelected ? c.surface1 : .clear
-        case .contact:
-            return hovered && !isSelected ? c.surface1 : .clear
-        }
-    }
-
-    private var glow: Color {
-        guard isSelected, theme.isGlass else { return .clear }
-        return theme.c.selection.opacity(0.35)
-    }
-
-    @ViewBuilder
-    private func selectionMark(_ shape: RoundedRectangle) -> some View {
-        if isSelected {
-            let c = theme.c
-            switch theme.direction {
-            case .studio:
-                shape.strokeBorder(c.selection, lineWidth: 2)
-            case .glass:
-                shape.strokeBorder(c.selection, lineWidth: 3)
-            case .quiet:
-                Rectangle().strokeBorder(c.selection, lineWidth: 1.5)
-            case .contact:
-                EmptyView() // у «Контакта» — уголки кадрирования вокруг миниатюры
+        .background(c.surface1, in: RoundedRectangle(cornerRadius: 2))
+        .overlay {
+            if isSelected {
+                ZStack {
+                    PencilLoop()
+                        .stroke(theme.pen.opacity(0.95), style: StrokeStyle(lineWidth: 3.4, lineCap: .round, lineJoin: .round))
+                    PencilLoop()
+                        .stroke(theme.pen.opacity(0.5), style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                        .padding(3)
+                }
+                .padding(-9)
+                .allowsHitTesting(false)
             }
         }
     }
 
-    private func thumbArea(_ thumb: Thumbnail?) -> some View {
+    /// «Жидкое стекло»: кадр — плитка со скруглением, имя в стеклянной капсуле поверх
+    private func glassCell(_ thumb: Thumbnail?) -> some View {
         let c = theme.c
-        let radius = theme.rSm
+        let shape = RoundedRectangle(cornerRadius: 18)
+        return ZStack {
+            shape.fill(c.surface1)
+            picture(thumb, radius: 0)
+        }
+        .aspectRatio(1.5, contentMode: .fit)
+        .clipShape(shape)
+        .brightness(hovered && !isSelected ? 0.05 : 0)
+        .overlay(alignment: .bottomLeading) {
+            if !compact {
+                HStack(spacing: 6) {
+                    Text(url.lastPathComponent)
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if !extras.isEmpty {
+                        Text("+" + extras.joined(separator: "+"))
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(c.text2)
+                    }
+                }
+                .foregroundStyle(c.text1)
+                .padding(.horizontal, 12)
+                .frame(height: 28)
+                .pcGlass(in: .capsule)
+                .padding(8)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if let mark, !mark.isEmpty || hovered || isSelected {
+                markEditor(mark)
+                    .padding(.horizontal, 6)
+                    .frame(height: 28)
+                    .pcGlass(in: .capsule)
+                    .padding(8)
+            }
+        }
+        .overlay {
+            if isSelected {
+                shape.strokeBorder(Color.white, lineWidth: 2)
+                RoundedRectangle(cornerRadius: 21)
+                    .stroke(c.selection.opacity(0.88), lineWidth: 3)
+                    .padding(-3.5)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if !reasons.isEmpty {
+                reasonLine
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .pcGlass(in: .capsule)
+                    .padding(.bottom, compact ? 8 : 42)
+            }
+        }
+    }
+
+    /// «Нейтраль»: кадр без подложки, под ним имя и размер; выбранный — белая рамка
+    private func neutralCell(_ thumb: Thumbnail?) -> some View {
+        let c = theme.c
+        return VStack(alignment: .leading, spacing: 0) {
+            picture(thumb)
+            HStack(spacing: 5) {
+                Text(url.lastPathComponent)
+                    .font(.system(size: 12.5, weight: isSelected ? .bold : .medium))
+                    .foregroundStyle(isSelected ? Color.white : c.text1)
+                    .truncationMode(.middle)
+                if !extras.isEmpty {
+                    pairTag
+                }
+                if let mark, !mark.isEmpty || hovered || isSelected {
+                    Spacer(minLength: 4)
+                    markEditor(mark)
+                }
+            }
+            .lineLimit(1)
+            .padding(.top, 7)
+            if !compact {
+                if reasons.isEmpty {
+                    Text(details(thumb?.info))
+                        .font(.system(size: 11.5).monospacedDigit())
+                        .foregroundStyle(c.text3)
+                        .lineLimit(1)
+                        .padding(.top, 1)
+                } else {
+                    reasonLine
+                        .padding(.top, 1)
+                }
+            } else if !reasons.isEmpty {
+                reasonLine
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// «Световой стол»: отпечаток с белыми полями, подпись на нижнем поле
+    private func tableCell(_ thumb: Thumbnail?) -> some View {
+        let c = theme.c
+        let shape = RoundedRectangle(cornerRadius: 2)
+        return VStack(alignment: .leading, spacing: 0) {
+            picture(thumb)
+            HStack(spacing: 6) {
+                Text(url.lastPathComponent)
+                    .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? c.text1 : c.text2)
+                    .truncationMode(.middle)
+                if !extras.isEmpty {
+                    pairTag
+                }
+                Spacer(minLength: 4)
+                if let mark, !mark.isEmpty || hovered || isSelected {
+                    markEditor(mark)
+                }
+                Text("\(number)")
+                    .font(.system(size: 11.5).monospacedDigit())
+                    .foregroundStyle(c.text3)
+            }
+            .lineLimit(1)
+            .frame(height: 22)
+            if !reasons.isEmpty {
+                reasonLine
+                    .padding(.bottom, 4)
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.top, 7)
+        .padding(.bottom, 3)
+        .background(Color.white, in: shape)
+        .shadow(color: Color(hex: 0x141419).opacity(0.1), radius: 0.5, y: 1)
+        .shadow(color: Color(hex: 0x141419).opacity(isSelected ? 0.42 : (hovered ? 0.34 : 0.26)),
+                radius: isSelected ? 14 : (hovered ? 11 : 8), y: isSelected ? 14 : (hovered ? 10 : 6))
+        .overlay {
+            if isSelected {
+                shape.stroke(c.text1, lineWidth: 2.5).padding(-1.25)
+            }
+        }
+    }
+
+    // MARK: Кадр и значки
+
+    /// Миниатюра в рамке 3 : 2 целиком, со значками; у «Нейтрали» рамка выбора — по краю самого кадра
+    private func picture(_ thumb: Thumbnail?, radius: CGFloat? = nil) -> some View {
+        let c = theme.c
+        let r = radius ?? (theme.isNeutral ? 4 : (theme.isGlass ? 0 : 1))
         return ZStack {
             if let image = thumb?.image {
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
                     .scaledToFit()
-                    .clipShape(RoundedRectangle(cornerRadius: radius))
+                    .clipShape(RoundedRectangle(cornerRadius: r))
+                    .brightness(hovered && !theme.isGlass ? 0.05 : 0)
+                    .opacity(rejected ? 0.4 : 1)
+                    .overlay {
+                        if isSelected && theme.isNeutral {
+                            RoundedRectangle(cornerRadius: r + 1)
+                                .stroke(Color.black, lineWidth: 1)
+                                .padding(-2.5)
+                            RoundedRectangle(cornerRadius: r + 1)
+                                .stroke(Color.white, lineWidth: 2)
+                                .padding(-1)
+                        }
+                    }
             } else if thumb == nil {
-                // Загрузка: серая заглушка и индикатор
-                RoundedRectangle(cornerRadius: radius)
-                    .fill(c.surface2)
-                    .aspectRatio(1.5, contentMode: .fit)
-                    .padding(.horizontal, 20)
+                // Загрузка: заглушка и индикатор
+                RoundedRectangle(cornerRadius: r)
+                    .fill(theme.isTable && theme.isLight ? c.surface3 : c.surface2)
                 ProgressView()
                     .controlSize(.small)
             } else {
@@ -966,42 +1360,53 @@ private struct GridCell: View {
                     .foregroundStyle(c.text3)
             }
         }
-        .aspectRatio(theme.isContact ? 1.5 : 1, contentMode: .fit)
+        .aspectRatio(1.5, contentMode: .fit)
         .frame(maxWidth: .infinity)
-        .overlay {
-            if isSelected && theme.isContact {
-                CropCorners()
-                    .stroke(c.selection, lineWidth: 2)
-                    .padding(-6)
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            if hasNotes {
-                noteBadge
-                    .padding(6)
-            }
-        }
         .overlay(alignment: .topLeading) {
-            if !defects.isEmpty {
-                defectBadge
-                    .padding(6)
+            HStack(spacing: 4) {
+                if !defects.isEmpty {
+                    defectBadge
+                }
+                if mark?.flag == PhotoFlag.pick.rawValue {
+                    cornerBadge("flag.fill", color: Color.white, help: "Оставлен")
+                }
+                if rejected {
+                    cornerBadge("flag.slash.fill", color: Color(hex: 0xFF6B61), help: "Отклонён (⌥U — снять флаг)")
+                }
+                if hasNotes && !theme.isFilm {
+                    cornerBadge("pencil", color: Color.white, help: "Есть пометки")
+                }
+                if adjusted {
+                    cornerBadge("slider.horizontal.3", color: Color.white, help: "Есть коррекция (E в просмотре)")
+                }
             }
+            .padding(theme.isGlass ? 10 : 6)
         }
         .overlay(alignment: .bottomTrailing) {
             if let bestNote {
                 bestBadge(bestNote)
-                    .padding(6)
+                    .padding(theme.isGlass ? 10 : 6)
             }
         }
-        .overlay(alignment: .bottomLeading) {
+        .overlay(alignment: .topTrailing) {
             if let label {
                 Image(systemName: label ? "xmark.circle.fill" : "checkmark.circle.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.white, label ? theme.c.danger : theme.c.success)
-                    .padding(6)
+                    .foregroundStyle(Color.white, label ? c.danger : c.success)
+                    .padding(theme.isGlass ? 44 : 6)
                     .help(label ? "Размечено: брак" : "Размечено: норма")
             }
         }
+    }
+
+    /// Круглый значок на тёмной подложке поверх кадра
+    private func cornerBadge(_ symbol: String, color: Color, help: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(color)
+            .frame(width: 22, height: 22)
+            .background(Color.black.opacity(0.62), in: Circle())
+            .help(help)
     }
 
     /// «⚠︎ Размыто, Темно» — причины брака; подробности в подсказке
@@ -1038,107 +1443,23 @@ private struct GridCell: View {
 
     /// Маленький значок брака; причины — в подсказке
     private var defectBadge: some View {
-        let c = theme.c
-        return Image(systemName: "exclamationmark.triangle.fill")
+        Image(systemName: "exclamationmark.triangle.fill")
             .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(c.warning)
-            .frame(width: 18, height: 18)
-            .background {
-                if !theme.isQuiet {
-                    Circle().fill(c.overlay)
-                    Circle().stroke(c.line, lineWidth: 1)
-                }
-            }
-            .shadow(color: .black.opacity(theme.isLight ? 0.15 : 0), radius: 1.5, y: 1)
+            .foregroundStyle(theme.c.warning)
+            .frame(width: 22, height: 22)
+            .background(Color.black.opacity(0.62), in: Circle())
             .help(defects.map { "\($0.reason.title): \($0.detail)" }.joined(separator: "\n"))
     }
 
-    /// Значок «есть пометки» в правом верхнем углу миниатюры
-    private var noteBadge: some View {
-        let c = theme.c
-        return Image(systemName: "pencil")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(theme.isQuiet ? c.text1 : c.accent)
-            .frame(width: 20, height: 20)
-            .background {
-                if !theme.isQuiet {
-                    Circle().fill(c.overlay)
-                    Circle().stroke(c.line, lineWidth: 1)
-                }
-            }
-            .shadow(color: .black.opacity(theme.isLight ? 0.15 : 0), radius: 1.5, y: 1)
-            .help("Есть пометки")
-    }
-
-    @ViewBuilder
-    private func caption(_ info: PhotoInfo?) -> some View {
-        let c = theme.c
-        if theme.isQuiet {
-            VStack(spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(url.lastPathComponent)
-                        .font(.system(size: 11))
-                        .foregroundStyle(isSelected ? c.text1 : c.text3)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if !extras.isEmpty {
-                        pairTag
-                    }
-                    if let mark {
-                        markEditor(mark)
-                    }
-                }
-                if !reasons.isEmpty {
-                    reasonLine
-                }
-            }
-            .frame(maxWidth: .infinity)
-        } else {
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    Text(url.lastPathComponent)
-                        .font(.system(size: theme.isContact ? 11 : 12, weight: .medium))
-                        .foregroundStyle(thumbnail == nil && ThumbnailLoader.cached(url) == nil ? c.text2 : c.text1)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if !extras.isEmpty {
-                        pairTag
-                    }
-                    if let mark, !mark.isEmpty || hovered || isSelected {
-                        Spacer(minLength: 4)
-                        markEditor(mark)
-                    }
-                }
-                if !compact {
-                    // Строки есть всегда, чтобы все ячейки были одной высоты
-                    Text(details(info))
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(c.text3)
-                    if reasons.isEmpty {
-                        Text(info?.camera ?? " ")
-                            .font(.system(size: 11))
-                            .foregroundStyle(c.text3)
-                    } else {
-                        reasonLine
-                    }
-                } else if !reasons.isEmpty {
-                    reasonLine
-                }
-            }
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    /// Звёзды и цвет: пустые видны при наведении и у выбранного кадра
+    /// Флаг, звёзды и цвет: пустые видны при наведении и у выбранного кадра
     private func markEditor(_ mark: PhotoMark) -> some View {
         MarkEditor(
             mark: mark,
             size: 10,
             showsEmpty: hovered || isSelected,
             onRating: { onMark(.rating($0)) },
-            onColor: { onMark(.color($0)) }
+            onColor: { onMark(.color($0)) },
+            onFlag: { onMark(.flag($0)) }
         )
     }
 
@@ -1154,6 +1475,7 @@ private struct GridCell: View {
             .help("Кадр снят в нескольких форматах; переносится целиком")
     }
 
+    /// «47,3 МБ · 8256×5504»
     private func details(_ info: PhotoInfo?) -> String {
         guard let info else { return " " }
         var parts: [String] = []
@@ -1163,30 +1485,145 @@ private struct GridCell: View {
         if let w = info.pixelWidth, let h = info.pixelHeight {
             parts.append("\(w)×\(h)")
         }
+        if let camera = info.camera, !compact {
+            parts.append(camera)
+        }
         return parts.isEmpty ? " " : parts.joined(separator: " · ")
     }
 }
 
-/// Четыре уголка кадрирования («Контакт»: выделение кадра на контактном листе)
-nonisolated struct CropCorners: Shape {
-    var length: CGFloat = 14
+// MARK: - Колонка папок «Нейтрали»
 
-    func path(in rect: CGRect) -> Path {
-        let l = min(length, rect.width / 2, rect.height / 2)
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY + l))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.minX + l, y: rect.minY))
-        path.move(to: CGPoint(x: rect.maxX - l, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + l))
-        path.move(to: CGPoint(x: rect.minX, y: rect.maxY - l))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX + l, y: rect.maxY))
-        path.move(to: CGPoint(x: rect.maxX - l, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - l))
-        return path
+/// Слева всегда видно, куда ведут клавиши и сколько там кадров; ниже — разделы умного отбора
+private struct NeutralRail: View {
+    @Bindable var session: PhotoSession
+
+    @Environment(\.theme) private var theme
+    @AppStorage(Feature.transfer.key) private var transferOn = true
+
+    var body: some View {
+        let c = theme.c
+        VStack(alignment: .leading, spacing: 2) {
+            if transferOn {
+                header("Папки")
+                if session.destinations.isEmpty {
+                    Text("Папок назначения нет")
+                        .font(.system(size: 12))
+                        .foregroundStyle(c.text3)
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 4)
+                }
+                ForEach(session.destinations) { destination in
+                    row(key: destination.shortcut, title: destination.name, count: session.movedCount(to: destination))
+                        .help(PathDisplay.short(destination.url))
+                }
+            }
+            row(key: "⌫", title: "Корзина", count: session.trashedInSession)
+
+            if session.sectionsAvailable {
+                Spacer().frame(height: 18)
+                header("Разделы")
+                section(.all, "Все кадры", session.allPhotos.count, key: "⌘1")
+                section(.defects, "Возможный брак", session.defectPhotos.count, key: "⌘2")
+                section(.series, "Серии", session.seriesCount, key: "⌘3")
+                if PhotoAnalyzer.peopleEnabled {
+                    section(.people, "Люди", session.peopleGroups.count, key: "⌘4")
+                }
+                if AnalysisStore.shared.isRunning {
+                    Text(AnalysisStore.shared.progressText)
+                        .font(.system(size: 11.5).monospacedDigit())
+                        .foregroundStyle(c.text3)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 4)
+                }
+            }
+
+            Spacer(minLength: 12)
+            progress
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 16)
+        .frame(width: 220)
+        .frame(maxHeight: .infinity)
+        .background(c.surface1)
+    }
+
+    private func header(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(theme.c.text3)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 6)
+    }
+
+    private func row(key: String, title: String, count: Int, isOn: Bool = false) -> some View {
+        let c = theme.c
+        return HStack(spacing: 10) {
+            KeyCap(key)
+            Text(title)
+                .font(.system(size: 13.5))
+                .foregroundStyle(c.text1)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
+            Text("\(count)")
+                .font(.system(size: 13).monospacedDigit())
+                .foregroundStyle(c.text2)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 36)
+        .background(isOn ? c.surface2 : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func section(_ value: PhotoSection, _ title: String, _ count: Int, key: String) -> some View {
+        let c = theme.c
+        let isOn = session.section == value
+        return Button {
+            session.showSection(value)
+        } label: {
+            HStack(spacing: 10) {
+                Text(title)
+                    .font(.system(size: 13.5, weight: isOn ? .semibold : .regular))
+                    .foregroundStyle(c.text1)
+                Spacer(minLength: 4)
+                Text("\(count)")
+                    .font(.system(size: 13).monospacedDigit())
+                    .foregroundStyle(c.text2)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 34)
+            .background(isOn ? c.surface2 : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help("\(title) (\(key))")
+    }
+
+    /// «Разобрано 42 из 480»
+    private var progress: some View {
+        let c = theme.c
+        let done = session.sortedInSession
+        let total = done + session.allPhotos.count
+        let share = total > 0 ? Double(done) / Double(total) : 0
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Разобрано")
+                Spacer()
+                Text("\(done) из \(total)").monospacedDigit()
+            }
+            .font(.system(size: 12.5))
+            .foregroundStyle(c.text2)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(c.surface3)
+                    Capsule().fill(Color(hex: 0xD8D8D8)).frame(width: max(geo.size.width * share, share > 0 ? 4 : 0))
+                }
+            }
+            .frame(height: 4)
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 4)
     }
 }
 
@@ -1313,26 +1750,39 @@ struct FaceThumb: View {
 
 // MARK: - Фильтр по звёздам и цвету
 
-/// Тот же список, что был в меню, но не закрывается после выбора: звёзды и цвета отмечаются по несколько.
+/// Тот же список, что был в меню, но не закрывается после выбора: звёзды, цвета и флаги отмечаются по несколько.
 /// «★★» — только две звезды, «★★★ ★★★★ ★★★★★» — от трёх; ничего не отмечено — фильтра нет
 private struct MarkFilterPanel: View {
     @Bindable var session: PhotoSession
 
     @Environment(\.theme) private var theme
+    @AppStorage(Feature.stars.key) private var starsOn = false
+    @AppStorage(Feature.colors.key) private var colorsOn = false
+    @AppStorage(Feature.flags.key) private var flagsOn = false
 
     var body: some View {
         let filter = session.markFilter
         VStack(alignment: .leading, spacing: 0) {
-            header("Звёзды")
-            MenuRow(title: "Без звёзд", checked: filter.ratings.contains(0)) { toggleRating(0) }
-            ForEach(1...5, id: \.self) { n in
-                MenuRow(title: String(repeating: "★", count: n), checked: filter.ratings.contains(n)) { toggleRating(n) }
+            if flagsOn {
+                header("Флаг")
+                MenuRow(title: "Оставлено", checked: filter.flags.contains(1)) { toggleFlag(1) }
+                MenuRow(title: "Отклонено", checked: filter.flags.contains(2)) { toggleFlag(2) }
+                MenuRow(title: "Без флага", checked: filter.flags.contains(0)) { toggleFlag(0) }
             }
-            header("Цвет")
-            MenuRow(title: "Без цвета", checked: filter.colors.contains(0)) { toggleColor(0) }
-            ForEach(ColorClass.allCases) { color in
-                MenuRow(title: color.title, checked: filter.colors.contains(color.rawValue), dot: color.color) {
-                    toggleColor(color.rawValue)
+            if starsOn {
+                header("Звёзды")
+                MenuRow(title: "Без звёзд", checked: filter.ratings.contains(0)) { toggleRating(0) }
+                ForEach(1...5, id: \.self) { n in
+                    MenuRow(title: String(repeating: "★", count: n), checked: filter.ratings.contains(n)) { toggleRating(n) }
+                }
+            }
+            if colorsOn {
+                header("Цвет")
+                MenuRow(title: "Без цвета", checked: filter.colors.contains(0)) { toggleColor(0) }
+                ForEach(ColorClass.allCases) { color in
+                    MenuRow(title: color.title, checked: filter.colors.contains(color.rawValue), dot: color.color) {
+                        toggleColor(color.rawValue)
+                    }
                 }
             }
             Divider().padding(.vertical, 5)
@@ -1340,7 +1790,7 @@ private struct MarkFilterPanel: View {
                 session.markFilter = MarkFilter()
             }
             Divider().padding(.vertical, 5)
-            MenuRow(title: "Записать звёзды и цвета в XMP") {
+            MenuRow(title: "Записать в XMP") {
                 session.exportMarks()
             }
         }
@@ -1365,6 +1815,14 @@ private struct MarkFilterPanel: View {
             session.markFilter.ratings.remove(n)
         } else {
             session.markFilter.ratings.insert(n)
+        }
+    }
+
+    private func toggleFlag(_ n: Int) {
+        if session.markFilter.flags.contains(n) {
+            session.markFilter.flags.remove(n)
+        } else {
+            session.markFilter.flags.insert(n)
         }
     }
 

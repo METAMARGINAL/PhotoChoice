@@ -93,29 +93,29 @@ struct DrawToolbar: View {
     var body: some View {
         let c = theme.c
         switch theme.direction {
-        case .studio:
+        case .neutral:
             content
                 .padding(4)
                 .frame(maxWidth: .infinity)
-                .background(c.surface1)
-                .overlay(alignment: .top) {
-                    Rectangle().fill(c.line).frame(height: 1)
-                }
+                .frame(minHeight: theme.hintbarHeight)
+                .background(Color(hex: 0x222222))
+        case .table:
+            content
+                .padding(4)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: theme.hintbarHeight)
+                .background(theme.trayFill)
         case .glass:
             content
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .pcGlass(in: .capsule)
                 .padding(.bottom, 16)
-        case .quiet:
-            content
-                .padding(.bottom, 8)
-        case .contact:
+        case .film:
             content
                 .padding(6)
-                .background(c.overlay, in: RoundedRectangle(cornerRadius: 4))
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(c.line, lineWidth: 1))
-                .shadow(color: .black.opacity(0.6), radius: 9, y: 6)
+                .background(c.toastFill, in: RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .black.opacity(0.55), radius: 14, y: 10)
                 .padding(.bottom, 14)
         }
     }
@@ -181,27 +181,20 @@ struct DrawToolbar: View {
         } label: {
             Image(systemName: tool.symbol)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(isOn ? (theme.isQuiet ? c.text1 : c.accent) : c.text2)
+                .foregroundStyle(isOn ? c.accent : c.text2)
                 .frame(width: 34, height: 34)
-                .background(isOn && !theme.isQuiet ? c.selectionFill : Color.clear, in: itemShape)
+                .background(isOn ? c.selectionFill : Color.clear, in: itemShape)
                 .overlay {
-                    if isOn && !theme.isQuiet {
+                    if isOn {
                         itemShape.strokeBorder(c.accent, lineWidth: 1.5)
                     }
                 }
                 .overlay(alignment: .bottomTrailing) {
-                    if !theme.isQuiet {
-                        Text(shortcut(tool))
-                            .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(isOn ? c.accent : c.text3)
-                            .padding(.trailing, 3)
-                            .padding(.bottom, 2)
-                    }
-                }
-                .overlay(alignment: .bottom) {
-                    if isOn && theme.isQuiet {
-                        Rectangle().fill(c.text1).frame(height: 1.5).padding(.horizontal, 10)
-                    }
+                    Text(shortcut(tool))
+                        .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(isOn ? c.accent : c.text3)
+                        .padding(.trailing, 3)
+                        .padding(.bottom, 2)
                 }
                 .contentShape(itemShape)
         }
@@ -246,10 +239,10 @@ struct DrawToolbar: View {
             session.drawSize = size
         } label: {
             RoundedRectangle(cornerRadius: 4)
-                .fill(isOn ? (theme.isQuiet ? c.text1 : c.accent) : c.text2)
+                .fill(isOn ? c.accent : c.text2)
                 .frame(width: 16, height: barHeight)
                 .frame(width: 26, height: 34)
-                .background(isOn && !theme.isQuiet ? c.selectionFill : Color.clear, in: itemShape)
+                .background(isOn ? c.selectionFill : Color.clear, in: itemShape)
                 .contentShape(itemShape)
         }
         .buttonStyle(.plain)
@@ -268,9 +261,9 @@ struct DrawToolbar: View {
         return Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: symbol)
-                    .foregroundStyle(danger ? c.danger : (muted || theme.isQuiet ? c.text2 : c.text1))
+                    .foregroundStyle(danger ? c.danger : (muted ? c.text2 : c.text1))
                 Text(title)
-                    .foregroundStyle(muted || theme.isQuiet ? c.text2 : c.text1)
+                    .foregroundStyle(muted ? c.text2 : c.text1)
                 if let key {
                     KeyCap(key, size: .small)
                 }

@@ -19,18 +19,22 @@ The app is not notarized by Apple, so the first launch is blocked: open System S
 ### Features
 
 - **Smart culling** (in development): photos are analyzed in the background on this Mac (nothing is uploaded, files are never changed) and the grid gets three more sections. **Rejects** (`⌘2`) — blurry or out-of-focus shots (checked at 100 % around the eyes or the main subject), softer than their burst neighbors, closed eyes, blown highlights, too dark, tilted horizon, accidental shots; a small mark in "All photos" shows the reason. **Bursts** (`⌘3`) — shots taken in a row that look alike (and have the same faces), each with a header and the best shot marked: sharpest, with everyone's eyes open. **People** (`⌘4`) — faces that appear in several shots, grouped into people with the AuraFace recognition model (face vectors stay in the analysis cache on this Mac). Strictness, burst interval and "open rejects at the problem spot at 100 %" are in Settings. The **Reject calibration** panel (`⌥⌘K`) shows every photo on each metric's scale, lets you move thresholds, label shots as reject / good and train a small model on your labels. Apple's MobileCLIP model double-checks "Blurry": a shot stays in Rejects only if the model also sees it as out of focus; its other scores are shown in the calibration panel. Both models are in the repository (see below).
-- **Stars and color labels** (off by default, Settings → "Stars and colors"): `⌥1`–`⌥5` set stars, `⌃1`–`⌃8` set a color label, `⌥0` / `⌃0` clear them; in the grid they apply to the selection. You can also click the stars and the color dot under a thumbnail (on hover), in the viewer and in compare mode. Filter the grid by stars and colors with the button above it: pick one or several star counts and colors, e.g. only ★★ or ★★★–★★★★★. Marks are stored in the app and follow a photo when it is moved. "Write to XMP" saves them to a sidecar next to the photo (`DSCF0001.xmp`: `xmp:Rating`, `xmp:Label`) without touching the photo; an existing sidecar keeps everything else and moves together with its photo.
+- **Stars, color labels and flags** (off by default, Settings → Features; each one is turned on separately): `⌥1`–`⌥5` set stars, `⌃1`–`⌃8` set a color label, `⌥P` / `⌥X` / `⌥U` pick, reject or clear a flag, `⌥0` / `⌃0` clear stars and color; in the grid they apply to the selection. You can also click the flag, stars and color dot under a thumbnail (on hover), in the viewer and in compare mode. Filter the grid by flag, stars and colors with the button above it: pick one or several values, e.g. only ★★ or ★★★–★★★★★. Marks are stored in the app and follow a photo when it is moved. "Write to XMP" saves what is enabled to a sidecar next to the photo (`DSCF0001.xmp`: `xmp:Rating`, `xmp:Label`; a rejected photo gets `xmp:Rating="-1"`, as in Bridge and Lightroom) without touching the photo; an existing sidecar keeps everything else and moves together with its photo.
 - **Grid of all photos** (new in 1.1): thumbnails with file name, size, resolution and camera model. Adjust thumbnail size with the slider, pinch, or `+` / `−` / `0`. Sorting keys work right in the grid.
 - **Compare two shots** (new in 1.3, key `C`): reference (A) on the left, candidate (B) on the right, synced zoom and pan, swap sides, promote the candidate to reference, sort the active side with `1`–`9` / `Delete`.
 - **Color palette** (new in 1.3): about 10 main colors of the photo in the info panel (k-means in OKLab, works from the embedded preview, so RAW is fast).
-- **Themes** (new in 1.3): Studio, Glass, Quiet and Contact; Studio and Glass also come in light versions. The background under photos always stays neutral.
+- **Themes 2.0**: Film (a contact sheet with frame numbers on the film edge and the selected frame circled in red pencil), Liquid Glass (full-bleed photos, controls in floating glass capsules like macOS 26; light and dark), Neutral (gray with no tint, a sidebar shows where each key goes and how many photos are there) and Light Table (a light daytime theme: prints with white borders on a light table, a dark key tray). Key hints are labeled with folder names: "1 Selected, 2 Portfolio, ⌫ Trash". The viewer is always dark.
+- **Order by capture time** (off by default, Settings): photos from several cameras are shown, copied and dragged in EXIF date and time order instead of by file name.
 - **RAW + JPEG pairs** (new in 1.3): files with the same name are shown as one card and are moved, trashed and restored together.
 - **Rename by metadata** (new in 1.3, off by default): when moved to a destination folder, a photo can be renamed from its capture date and time, e.g. `2026-06-14_174212_DSC_0452`. Undo restores the old name.
-- **Settings window** (`⌘,`): theme, light/dark mode, RAW + JPEG pairs, renaming template with a live example.
+- **Settings window** (`⌘,`): six pages — Features, Transfer and names, Marks, Smart culling, Viewer, Appearance. Every feature (moving to folders, stars, colors, flags, smart culling, compare, drawing, photo info) is turned on separately; an off feature leaves no keys, hints or menu items. Three modes set the checkboxes at once: "Sort into folders", "Marks only", "Everything". Long explanations are behind the "?" buttons.
 - **Photo info panel** (new in 1.2, key `I`): shutter speed, aperture, ISO, focal length, camera and lens, exposure settings, resolution, color profile, GPS location, file details, and an RGB histogram with clipped highlights and shadows. Click a triangle in the histogram corner (or the number under it) to show crushed shadows in blue or clipped highlights in red right on the photo, in the viewer and in compare mode — like in Lightroom.
 - **Annotations** (new in 1.2, key `D`): draw on a photo with a pen, marker, arrow, rectangle or oval, in 6 colors and 3 sizes, with an eraser and undo. Annotations stay in memory and never change the original. Save an annotated copy (`⌘S`) or copy it to the clipboard (`⌘C` / `⇧⌘C`). Photos with annotations are marked in the grid.
 - **Trackpad and mouse** (new in 1.2): two-finger swipe to go to the next or previous photo, pinch and double-tap zoom toward the cursor, `⌘` / `⌥` + scroll to zoom with a mouse, zoom out below fit-to-screen.
+- **Adjustments** (key `E` in the viewer): exposure, contrast, highlights, shadows, whites, blacks, temperature, tint, vibrance and saturation sliders. `\` — before / after, `Z` — undo a slider move. The original is never changed: `⌘S` saves a full-resolution JPEG copy with the original EXIF.
+- **Right-click a photo** (grid and viewer): open it in Preview or any other app (Lightroom, Photoshop…; the RAW of a pair separately), or send it via AirDrop. Changes saved there appear when you return to PhotoChoice.
 - Full-screen viewer with fast loading: nearby photos are decoded in advance.
+- Panels in the viewer: `H` hides and shows them in any theme; optionally they fade out after 2 seconds of rest (Settings → Viewer). Motion is used only where an action is rare: a photo grows out of the grid, the info panel slides in; browsing and sorting by keys are instant.
 - Up to 9 destination folders, mapped to keys `1`–`9`. If you don't add any, a `Отобранные` (Selected) folder is created inside the source folder.
 - Swipe right or press `1` to move the photo to the first folder. Swipe left or press `Delete` to move it to the Trash.
 - Undo the last move, star or color with `Z` or `⌘Z`. A moved file goes back to where it was.
@@ -53,6 +57,8 @@ Everywhere:
 | `C` | Compare mode on / off |
 | `⌥1`–`⌥5` / `⌥0` | Stars / clear stars (when enabled in Settings) |
 | `⌃1`–`⌃8` / `⌃0` | Color label / clear label (when enabled in Settings) |
+| `⌥P` / `⌥X` / `⌥U` | Pick / reject / clear flag (when enabled in Settings) |
+| `H` | Hide / show panels in the viewer |
 | `⌘,` | Settings |
 | `⌘R` | Start review |
 
@@ -64,6 +70,7 @@ Grid:
 | `Home` / `End` | First / last photo |
 | `Return` / double-click | Open photo |
 | `+` / `−` / `0` | Bigger / smaller / default thumbnails |
+| `⌘F` | Search by file name (`4810-4830` — a range of frame numbers) |
 | `⌘1` / `⌘2` / `⌘3` / `⌘4` | All photos / Rejects / Bursts / People |
 | `↑` / `↓` in Bursts | Previous / next burst |
 | `⌥⌘K` | Reject calibration panel |
@@ -98,7 +105,7 @@ Compare:
 
 ### Requirements
 
-- macOS 15 or later (the Glass theme uses Liquid Glass on macOS 26 and a frosted background on older systems)
+- macOS 15 or later (the Liquid Glass theme uses real Liquid Glass on macOS 26 and a frosted background on older systems)
 - Xcode 26 or later to build
 
 ### Build
@@ -149,18 +156,22 @@ The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style
 ### Возможности
 
 - **Умный отбор** (в разработке): фото анализируются в фоне на этом Mac (ничего не отправляется, файлы не меняются), и в сетке появляются ещё три раздела. **Брак** (`⌘2`) — размытые кадры и промахи фокуса (проверяется в 100 % на глазах или главном объекте), кадры мягче соседей по серии, закрытые глаза, пересвет, темнота, завал горизонта, случайные кадры; в «Все фото» на таких кадрах маленький значок с причиной. **Серии** (`⌘3`) — кадры, снятые подряд и похожие друг на друга (в том числе по лицам), с заголовками и отметкой лучшего кадра: самый резкий, у всех открыты глаза. **Люди** (`⌘4`) — лица, которые встречаются на нескольких кадрах, собранные в людей моделью распознавания AuraFace (векторы лиц хранятся только в кэше анализа на этом Mac). Строгость, интервал серии и «открывать брак сразу в 100 % на проблемном месте» — в настройках. Панель **«Калибровка брака»** (`⌥⌘K`) показывает все кадры на шкале каждой метрики, позволяет двигать пороги, размечать кадры как «брак» и «норма» и обучить по этой разметке небольшую модель. Модель MobileCLIP от Apple перепроверяет «Размыто»: кадр остаётся в браке, только если и она видит, что он не в фокусе; остальные её оценки показываются в калибровке. Обе модели лежат в репозитории (см. ниже).
-- **Звёзды и цветовые метки** (по умолчанию выключены, Настройки → «Звёзды и цвета»): `⌥1`–`⌥5` ставят звёзды, `⌃1`–`⌃8` — цвет, `⌥0` / `⌃0` снимают; в сетке — выделенным кадрам. Звёзды и кружок цвета можно и кликнуть: под миниатюрой при наведении, в просмотре и в сравнении. Фильтр по звёздам и цвету — кнопка над сеткой: можно выбрать одно или несколько значений, например только ★★ или ★★★–★★★★★. Оценки хранятся в приложении и переезжают вместе с кадром. «Записать в XMP» сохраняет их в файл рядом с фото (`DSCF0001.xmp`: `xmp:Rating`, `xmp:Label`), сам снимок не меняется; в существующем XMP остальное остаётся, и он переносится вместе с кадром.
+- **Звёзды, цветовые метки и флаги** (по умолчанию выключены, Настройки → «Функции», каждое включается отдельно): `⌥1`–`⌥5` ставят звёзды, `⌃1`–`⌃8` — цвет, `⌥P` / `⌥X` / `⌥U` — флаг «оставить», «отклонить» или снять, `⌥0` / `⌃0` снимают звёзды и цвет; в сетке — выделенным кадрам. Флаг, звёзды и кружок цвета можно и кликнуть: под миниатюрой при наведении, в просмотре и в сравнении. Фильтр по флагу, звёздам и цвету — кнопка над сеткой: можно выбрать одно или несколько значений, например только ★★ или ★★★–★★★★★. Оценки хранятся в приложении и переезжают вместе с кадром. «Записать в XMP» сохраняет включённое в файл рядом с фото (`DSCF0001.xmp`: `xmp:Rating`, `xmp:Label`; отклонённый кадр получает `xmp:Rating="-1"`, как в Bridge и Lightroom), сам снимок не меняется; в существующем XMP остальное остаётся, и он переносится вместе с кадром.
 - **Сетка всех фото** (новое в 1.1): миниатюры с именем файла, размером, разрешением и моделью камеры. Размер миниатюр меняется слайдером, щипком или клавишами `+` / `−` / `0`. Клавиши отбора работают прямо в сетке.
 - **Сравнение двух кадров** (новое в 1.3, клавиша `C`): слева эталон (A), справа кандидат (B), синхронные масштаб и перемещение, обмен сторон, кандидат одной клавишей становится эталоном, активную сторону можно отбирать клавишами `1`–`9` / `Delete`.
 - **Палитра кадра** (новое в 1.3): около 10 основных цветов снимка в панели сведений (k-means в OKLab, считается по встроенному превью, поэтому быстро и для RAW).
-- **Темы оформления** (новое в 1.3): «Студия», «Стекло», «Тишина» и «Контакт»; у «Студии» и «Стекла» есть светлые варианты. Фон под фото всегда нейтральный.
+- **Темы 2.0**: «Плёнка» (контрольный лист: номера кадров на краю плёнки, выбранный кадр обведён красным карандашом), «Жидкое стекло» (фото на весь экран, управление в парящих стеклянных капсулах, как в macOS 26; светлая и тёмная), «Нейтраль» (серый без оттенка, слева видно, куда ведут клавиши и сколько там кадров) и «Световой стол» (светлая дневная тема: отпечатки с белыми полями на светлом столе, внизу тёмный пульт). Подсказки клавиш подписаны папками: «1 Отобранные, 2 Портфолио, ⌫ Корзина». Просмотр всегда тёмный.
+- **Порядок по времени съёмки** (по умолчанию выключен, Настройки): кадры с нескольких камер показываются, копируются и перетаскиваются по дате и времени из EXIF, а не по имени файла.
 - **Пары RAW + JPEG** (новое в 1.3): файлы с одинаковым именем показываются одной карточкой и переносятся, удаляются и возвращаются вместе.
 - **Переименование по метаданным** (новое в 1.3, по умолчанию выключено): при переносе в папку назначения кадр получает имя по дате и времени съёмки, например `2026-06-14_174212_DSC_0452`. Отмена возвращает прежнее имя.
-- **Окно «Настройки»** (`⌘,`): тема, светлый и тёмный режим, пары RAW + JPEG, шаблон переименования с примером на реальном кадре.
+- **Окно «Настройки»** (`⌘,`): шесть страниц — «Функции», «Перенос и имена», «Оценки», «Умный отбор», «Просмотр», «Оформление». Каждая функция (перенос по папкам, звёзды, цвета, флаги, умный отбор, сравнение, рисование, сведения) включается отдельно; выключенная не оставляет ни клавиш, ни подсказок, ни пунктов меню. Три режима расставляют галочки разом: «Раскладка по папкам», «Только оценки», «Всё вместе». Длинные пояснения — за кнопками «?».
 - **Сведения о снимке** (новое в 1.2, клавиша `I`): выдержка, диафрагма, ISO, фокусное расстояние, камера и объектив, параметры съёмки, разрешение, цветовой профиль, координаты съёмки, данные файла и RGB-гистограмма с долей пересвеченных и провальных пикселей. Клик по треугольнику в углу гистограммы (или по цифре под ней) показывает прямо на кадре провалы синим или пересветы красным — в просмотре и в сравнении, как в Lightroom.
 - **Пометки** (новое в 1.2, клавиша `D`): рисуйте на фото карандашом, маркером, стрелкой, рамкой или овалом, 6 цветов и 3 толщины, есть ластик и отмена. Пометки хранятся только в памяти и не меняют оригинал. Копию с пометками можно сохранить (`⌘S`) или скопировать в буфер обмена (`⌘C` / `⇧⌘C`). Фото с пометками отмечены в сетке.
 - **Трекпад и мышь** (новое в 1.2): свайп двумя пальцами листает фото, щипок и двойной тап увеличивают к курсору, `⌘` / `⌥` + прокрутка меняет масштаб мышью, фото можно уменьшить меньше размера экрана.
+- **Коррекция** (клавиша `E` в просмотре): ползунки экспозиции, контраста, светлых, теней, белых, чёрных, температуры, оттенка, красочности и насыщенности. `\` — до / после, `Z` — отменить движение ползунка. Оригинал не меняется: `⌘S` сохраняет копию JPEG в полном разрешении с EXIF исходника.
+- **Правый клик по кадру** (сетка и просмотр): открыть в «Просмотре» или любой другой программе (Lightroom, Photoshop…; RAW пары — отдельно) или отправить по AirDrop. Сохранённые там правки появляются, когда возвращаетесь в PhotoChoice.
 - Полноэкранный просмотр с быстрой загрузкой: соседние фото подгружаются заранее.
+- Панели в просмотре: `H` прячет и возвращает их в любой теме; по желанию они гаснут через 2 секунды покоя (Настройки → «Просмотр»). Движение — только там, где действие редкое: кадр вырастает из сетки, панель сведений выезжает; листание и отбор клавишами — мгновенно.
 - До 9 папок назначения, каждой соответствует клавиша `1`–`9`. Если ни одной не добавить, внутри исходной папки создаётся папка «Отобранные».
 - Свайп вправо или клавиша `1` переносит фото в первую папку. Свайп влево или `Delete` отправляет его в корзину.
 - `Z` или `⌘Z` отменяет последний перенос, звёзды или цвет: перенесённый файл возвращается на место.
@@ -183,6 +194,8 @@ The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style
 | `C` | Включить / выключить сравнение |
 | `⌥1`–`⌥5` / `⌥0` | Звёзды / снять звёзды (если включено в настройках) |
 | `⌃1`–`⌃8` / `⌃0` | Цветовая метка / снять метку (если включено в настройках) |
+| `⌥P` / `⌥X` / `⌥U` | Флаг: оставить / отклонить / снять (если включено в настройках) |
+| `H` | Спрятать / показать панели в просмотре |
 | `⌘,` | Настройки |
 | `⌘R` | Начать просмотр |
 
@@ -194,6 +207,7 @@ The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style
 | `Home` / `End` | Первое / последнее фото |
 | `Return` / двойной клик | Открыть фото |
 | `+` / `−` / `0` | Крупнее / мельче / стандартный размер миниатюр |
+| `⌘F` | Поиск по имени файла (`4810-4830` — диапазон номеров кадров) |
 | `⌘1` / `⌘2` / `⌘3` / `⌘4` | Все фото / Брак / Серии / Люди |
 | `↑` / `↓` в «Сериях» | Предыдущая / следующая серия |
 | `⌥⌘K` | Панель «Калибровка брака» |
@@ -228,7 +242,7 @@ The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style
 
 ### Требования
 
-- macOS 15 или новее (тема «Стекло» на macOS 26 использует Liquid Glass, на старых системах — матовую подложку)
+- macOS 15 или новее (тема «Жидкое стекло» на macOS 26 использует Liquid Glass, на старых системах — матовую подложку)
 - Для сборки нужен Xcode 26 или новее
 
 ### Сборка

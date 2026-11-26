@@ -2,37 +2,41 @@ import AppKit
 import Combine
 import SwiftUI
 
-// Темы оформления по дизайн-системе PhotoChoice: четыре направления,
-// у «Студии» и «Стекла» есть светлые варианты. Значения — из tokens.json.
-// Светлыми бывают только стартовое окно, сетка и панель в сетке;
-// просмотр, рисование и сравнение всегда тёмные.
+// Темы 2.0 (холст «PhotoChoice: темы 2.0»): у каждой одна идея.
+// «Плёнка» — контрольный лист с красным карандашом, «Жидкое стекло» — капсулы как в macOS 26,
+// «Нейтраль» — серый без оттенка с колонкой папок, «Световой стол» — светлый дневной режим.
+// Просмотр, рисование и сравнение всегда тёмные: белое поле искажает яркость снимка.
 
 // MARK: - Выбор пользователя
 
 nonisolated enum ThemeDirection: String, CaseIterable, Identifiable, Sendable {
-    case studio, glass, quiet, contact
+    case film, glass, neutral, table
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .studio: "Студия"
-        case .glass: "Стекло"
-        case .quiet: "Тишина"
-        case .contact: "Контакт"
+        case .film: "Плёнка"
+        case .glass: "Жидкое стекло"
+        case .neutral: "Нейтраль"
+        case .table: "Световой стол"
         }
     }
 
     var tagline: String {
         switch self {
-        case .studio: "Строго и плотно, янтарный акцент"
-        case .glass: "Стеклянные капсулы (Liquid Glass — на macOS 26)"
-        case .quiet: "Только фото и чёрное поле"
-        case .contact: "Контактный лист и сейфлайт"
+        case .film: "Контрольный лист и красный карандаш"
+        case .glass: "Фото на весь экран, стеклянные капсулы"
+        case .neutral: "Серый без оттенка, папки всегда на виду"
+        case .table: "Светлый стол с отпечатками, тёмный пульт"
         }
     }
 
-    var hasLight: Bool { self == .studio || self == .glass }
+    /// Есть светлый и тёмный варианты (переключаются режимом оформления)
+    var hasLight: Bool { self == .glass }
+
+    /// Всегда светлая (кроме просмотра)
+    var alwaysLight: Bool { self == .table }
 }
 
 nonisolated enum AppearanceMode: String, CaseIterable, Identifiable, Sendable {
@@ -79,94 +83,98 @@ extension Color {
 }
 
 extension ThemePalette {
-    nonisolated static let studio = ThemePalette(
-        canvas: Color(hex: 0x1F1F1F), app: Color(hex: 0x242424),
-        surface1: Color(hex: 0x2B2B2B), surface2: Color(hex: 0x333333), surface3: Color(hex: 0x3D3D3D),
-        overlay: .rgba(30, 30, 30, 0.88),
-        line: Color(hex: 0x3A3A3A), lineStrong: Color(hex: 0x8A8A8A),
-        text1: Color(hex: 0xEBEBEB), text2: Color(hex: 0xB8B8B8), text3: Color(hex: 0x9D9D9D),
-        accent: Color(hex: 0xF2A93B), accentFill: Color(hex: 0xF2A93B), onAccent: Color(hex: 0x1A1A1A),
-        selection: Color(hex: 0xF2A93B), selectionFill: .rgba(242, 169, 59, 0.16), focus: Color(hex: 0xF2A93B),
-        success: Color(hex: 0x5CCB8A), warning: Color(hex: 0xFFC857), danger: Color(hex: 0xFF6B61), edge: Color(hex: 0x9D9D9D),
-        keyFill: Color(hex: 0x3A3A3A), keyLine: Color(hex: 0x5C5C5C), keyText: Color(hex: 0xEBEBEB),
-        toastFill: .rgba(36, 36, 36, 0.94),
+    /// «Плёнка»: края плёнки тёплые, номера кадров янтарные, выбор — красный карандаш
+    nonisolated static let film = ThemePalette(
+        canvas: Color(hex: 0x0E0E0E), app: Color(hex: 0x0E0E0E),
+        surface1: Color(hex: 0x171717), surface2: Color(hex: 0x1F1F1F), surface3: Color(hex: 0x2C2C2C),
+        overlay: .rgba(22, 22, 22, 0.94),
+        line: Color(hex: 0x262626), lineStrong: Color(hex: 0x5A5650),
+        text1: Color(hex: 0xECE9E4), text2: Color(hex: 0xA9A59E), text3: Color(hex: 0x8C8881),
+        accent: Color(hex: 0xE8A13A), accentFill: Color(hex: 0xECE9E4), onAccent: Color(hex: 0x111111),
+        selection: Color(hex: 0xF2493C), selectionFill: .rgba(242, 73, 60, 0.12), focus: Color(hex: 0xF2493C),
+        success: Color(hex: 0x8FCF7A), warning: Color(hex: 0xE3A64A), danger: Color(hex: 0xF2493C), edge: Color(hex: 0xE8A13A),
+        keyFill: Color(hex: 0x242424), keyLine: .clear, keyText: Color(hex: 0xECE9E4),
+        toastFill: .rgba(22, 22, 22, 0.94),
         histR: Color(hex: 0xFF5A52), histG: Color(hex: 0x4ED36A), histB: Color(hex: 0x4C8DFF),
         clipHigh: Color(hex: 0xFF4D4D), clipLow: Color(hex: 0x4D8DFF)
     )
 
     nonisolated static let glass = ThemePalette(
-        canvas: Color(hex: 0x0D0D0D), app: Color(hex: 0x141414),
-        surface1: Color(hex: 0x1C1C1E), surface2: Color(hex: 0x2C2C2E), surface3: Color(hex: 0x3A3A3C),
-        overlay: .rgba(44, 44, 46, 0.55),
-        line: .rgba(255, 255, 255, 0.10), lineStrong: .rgba(255, 255, 255, 0.42),
-        text1: Color(hex: 0xFFFFFF), text2: Color(hex: 0xC7C7CC), text3: Color(hex: 0xA1A1A8),
-        accent: Color(hex: 0x3D9BFF), accentFill: Color(hex: 0x0A6FDB), onAccent: Color(hex: 0xFFFFFF),
+        canvas: Color(hex: 0x0A0A0B), app: Color(hex: 0x0A0A0B),
+        surface1: Color(hex: 0x1A1A1C), surface2: Color(hex: 0x2C2C2E), surface3: Color(hex: 0x3A3A3C),
+        overlay: .rgba(46, 46, 52, 0.5),
+        line: .rgba(255, 255, 255, 0.12), lineStrong: .rgba(255, 255, 255, 0.42),
+        text1: Color(hex: 0xFFFFFF), text2: .rgba(255, 255, 255, 0.76), text3: .rgba(255, 255, 255, 0.6),
+        accent: Color(hex: 0x3D9BFF), accentFill: Color(hex: 0x0A84FF), onAccent: Color(hex: 0xFFFFFF),
         selection: Color(hex: 0x3D9BFF), selectionFill: .rgba(61, 155, 255, 0.20), focus: Color(hex: 0x3D9BFF),
-        success: Color(hex: 0x30D158), warning: Color(hex: 0xFFD60A), danger: Color(hex: 0xFF453A), edge: Color(hex: 0xA1A1A8),
-        keyFill: .rgba(255, 255, 255, 0.14), keyLine: .rgba(255, 255, 255, 0.22), keyText: Color(hex: 0xFFFFFF),
+        success: Color(hex: 0x30D158), warning: Color(hex: 0xFFD60A), danger: Color(hex: 0xFF453A), edge: .rgba(255, 255, 255, 0.6),
+        keyFill: .rgba(255, 255, 255, 0.2), keyLine: .clear, keyText: Color(hex: 0xFFFFFF),
         toastFill: .rgba(40, 40, 42, 0.55),
         histR: Color(hex: 0xFF6159), histG: Color(hex: 0x4CD964), histB: Color(hex: 0x4D9BFF),
         clipHigh: Color(hex: 0xFF453A), clipLow: Color(hex: 0x3D9BFF)
     )
 
-    nonisolated static let quiet = ThemePalette(
-        canvas: Color(hex: 0x000000), app: Color(hex: 0x050505),
-        surface1: Color(hex: 0x0F0F0F), surface2: Color(hex: 0x171717), surface3: Color(hex: 0x222222),
-        overlay: .rgba(0, 0, 0, 0.55),
-        line: Color(hex: 0x1F1F1F), lineStrong: Color(hex: 0x727272),
-        text1: Color(hex: 0xF5F5F5), text2: Color(hex: 0xB0B0B0), text3: Color(hex: 0x8F8F8F),
-        accent: Color(hex: 0xFFFFFF), accentFill: Color(hex: 0xF5F5F5), onAccent: Color(hex: 0x000000),
-        selection: Color(hex: 0xFFFFFF), selectionFill: .rgba(255, 255, 255, 0.06), focus: Color(hex: 0xFFFFFF),
-        success: Color(hex: 0x8FD6A8), warning: Color(hex: 0xE6C87A), danger: Color(hex: 0xF08A80), edge: Color(hex: 0x8F8F8F),
-        keyFill: .clear, keyLine: .clear, keyText: Color(hex: 0xF5F5F5),
-        toastFill: .clear,
-        histR: Color(hex: 0xE07A74), histG: Color(hex: 0x7FC98F), histB: Color(hex: 0x7A9FE0),
-        clipHigh: Color(hex: 0xF5F5F5), clipLow: Color(hex: 0x8F8F8F)
-    )
-
-    nonisolated static let contact = ThemePalette(
-        canvas: Color(hex: 0x161616), app: Color(hex: 0x1A1A1A),
-        surface1: Color(hex: 0x202020), surface2: Color(hex: 0x292929), surface3: Color(hex: 0x333333),
-        overlay: .rgba(22, 22, 22, 0.9),
-        line: Color(hex: 0x333333), lineStrong: Color(hex: 0x848484),
-        text1: Color(hex: 0xEFEAE4), text2: Color(hex: 0xBDB5AB), text3: Color(hex: 0x9F968B),
-        accent: Color(hex: 0xFF6A3D), accentFill: Color(hex: 0xFF6A3D), onAccent: Color(hex: 0x1A0C06),
-        selection: Color(hex: 0xFF6A3D), selectionFill: .rgba(255, 106, 61, 0.12), focus: Color(hex: 0xFF6A3D),
-        success: Color(hex: 0x8FCF7A), warning: Color(hex: 0xE3A64A), danger: Color(hex: 0xFF5470), edge: Color(hex: 0x9F968B),
-        keyFill: .clear, keyLine: Color(hex: 0x5C5C5C), keyText: Color(hex: 0xEFEAE4),
-        toastFill: .rgba(22, 22, 22, 0.92),
-        histR: Color(hex: 0xFF5A52), histG: Color(hex: 0x4ED36A), histB: Color(hex: 0x4C8DFF),
-        clipHigh: Color(hex: 0xFF4D4D), clipLow: Color(hex: 0x4D8DFF)
-    )
-
-    nonisolated static let studioLight = ThemePalette(
-        canvas: Color(hex: 0x1F1F1F), app: Color(hex: 0xECECEC),
-        surface1: Color(hex: 0xF7F7F7), surface2: Color(hex: 0xFFFFFF), surface3: Color(hex: 0xE0E0E0),
-        overlay: .rgba(250, 250, 250, 0.92),
-        line: Color(hex: 0xD6D6D6), lineStrong: Color(hex: 0x7A7A7A),
-        text1: Color(hex: 0x1C1C1C), text2: Color(hex: 0x4A4A4A), text3: Color(hex: 0x666666),
-        accent: Color(hex: 0x9C5A06), accentFill: Color(hex: 0xF2A93B), onAccent: Color(hex: 0x1A1A1A),
-        selection: Color(hex: 0xB06804), selectionFill: .rgba(242, 169, 59, 0.24), focus: Color(hex: 0xB06804),
-        success: Color(hex: 0x1B7F45), warning: Color(hex: 0x8A5D00), danger: Color(hex: 0xC0352B), edge: Color(hex: 0x666666),
-        keyFill: Color(hex: 0xFFFFFF), keyLine: Color(hex: 0xB5B5B5), keyText: Color(hex: 0x1C1C1C),
-        toastFill: .rgba(255, 255, 255, 0.96),
-        histR: Color(hex: 0xFF5A52), histG: Color(hex: 0x4ED36A), histB: Color(hex: 0x4C8DFF),
-        clipHigh: Color(hex: 0xFF4D4D), clipLow: Color(hex: 0x4D8DFF)
-    )
-
     nonisolated static let glassLight = ThemePalette(
-        canvas: Color(hex: 0x0D0D0D), app: Color(hex: 0xF2F2F2),
+        canvas: Color(hex: 0x0A0A0B), app: Color(hex: 0xF2F2F2),
         surface1: Color(hex: 0xFFFFFF), surface2: Color(hex: 0xEBEBEB), surface3: Color(hex: 0xDEDEDE),
         overlay: .rgba(255, 255, 255, 0.62),
         line: .rgba(0, 0, 0, 0.10), lineStrong: .rgba(0, 0, 0, 0.50),
         text1: Color(hex: 0x1D1D1F), text2: Color(hex: 0x48484A), text3: Color(hex: 0x666669),
-        accent: Color(hex: 0x0062CC), accentFill: Color(hex: 0x0062CC), onAccent: Color(hex: 0xFFFFFF),
+        accent: Color(hex: 0x0062CC), accentFill: Color(hex: 0x0A84FF), onAccent: Color(hex: 0xFFFFFF),
         selection: Color(hex: 0x0070E8), selectionFill: .rgba(0, 122, 255, 0.14), focus: Color(hex: 0x0070E8),
         success: Color(hex: 0x1F7A36), warning: Color(hex: 0x8A6000), danger: Color(hex: 0xC9001A), edge: Color(hex: 0x666669),
-        keyFill: .rgba(0, 0, 0, 0.06), keyLine: .rgba(0, 0, 0, 0.16), keyText: Color(hex: 0x1D1D1F),
+        keyFill: .rgba(0, 0, 0, 0.07), keyLine: .clear, keyText: Color(hex: 0x1D1D1F),
         toastFill: .rgba(255, 255, 255, 0.66),
         histR: Color(hex: 0xFF6159), histG: Color(hex: 0x4CD964), histB: Color(hex: 0x4D9BFF),
         clipHigh: Color(hex: 0xFF453A), clipLow: Color(hex: 0x3D9BFF)
+    )
+
+    /// «Нейтраль»: серый без оттенка — интерфейс не влияет на то, как выглядит цвет кадра
+    nonisolated static let neutral = ThemePalette(
+        canvas: Color(hex: 0x2B2B2B), app: Color(hex: 0x1E1E1E),
+        surface1: Color(hex: 0x242424), surface2: Color(hex: 0x2E2E2E), surface3: Color(hex: 0x3A3A3A),
+        overlay: .rgba(36, 36, 36, 0.94),
+        line: Color(hex: 0x333333), lineStrong: Color(hex: 0x727272),
+        text1: Color(hex: 0xE8E8E8), text2: Color(hex: 0xB4B4B4), text3: Color(hex: 0x959595),
+        accent: Color(hex: 0xFFFFFF), accentFill: Color(hex: 0xECECEC), onAccent: Color(hex: 0x161616),
+        selection: Color(hex: 0xFFFFFF), selectionFill: .rgba(255, 255, 255, 0.08), focus: Color(hex: 0xFFFFFF),
+        success: Color(hex: 0x7CC992), warning: Color(hex: 0xE6C35C), danger: Color(hex: 0xF0786C), edge: Color(hex: 0x959595),
+        keyFill: Color(hex: 0x3A3A3A), keyLine: .clear, keyText: Color(hex: 0xE8E8E8),
+        toastFill: Color(hex: 0x161616),
+        histR: Color(hex: 0xFF5A52), histG: Color(hex: 0x4ED36A), histB: Color(hex: 0x4C8DFF),
+        clipHigh: Color(hex: 0xFF4D4D), clipLow: Color(hex: 0x4D8DFF)
+    )
+
+    /// «Световой стол»: светлый стол, белые отпечатки, тёмные чернила
+    nonisolated static let table = ThemePalette(
+        canvas: Color(hex: 0x1C1C1C), app: Color(hex: 0xF2F1EF),
+        surface1: Color(hex: 0xFFFFFF), surface2: Color(hex: 0xF6F5F3), surface3: Color(hex: 0xECEBE8),
+        overlay: .rgba(255, 255, 255, 0.96),
+        line: .rgba(20, 20, 25, 0.10), lineStrong: .rgba(20, 20, 25, 0.32),
+        text1: Color(hex: 0x1A1B1E), text2: Color(hex: 0x55585E), text3: Color(hex: 0x686B72),
+        accent: Color(hex: 0x1A1B1E), accentFill: Color(hex: 0x1A1B1E), onAccent: Color(hex: 0xFFFFFF),
+        selection: Color(hex: 0x1A1B1E), selectionFill: .rgba(26, 27, 30, 0.07), focus: Color(hex: 0x1A1B1E),
+        success: Color(hex: 0x2F7D4A), warning: Color(hex: 0x9A6400), danger: Color(hex: 0xC8321F), edge: Color(hex: 0x686B72),
+        keyFill: Color(hex: 0xECEBE8), keyLine: .clear, keyText: Color(hex: 0x1A1B1E),
+        toastFill: Color(hex: 0xFFFFFF),
+        histR: Color(hex: 0xE5484D), histG: Color(hex: 0x30A46C), histB: Color(hex: 0x3E7BFA),
+        clipHigh: Color(hex: 0xE5484D), clipLow: Color(hex: 0x3E7BFA)
+    )
+
+    /// «Световой стол» в просмотре: тёмное поле, пульт тот же
+    nonisolated static let tableDark = ThemePalette(
+        canvas: Color(hex: 0x1C1C1C), app: Color(hex: 0x1C1C1C),
+        surface1: Color(hex: 0x242528), surface2: Color(hex: 0x2B2B2B), surface3: Color(hex: 0x4A4A4A),
+        overlay: .rgba(32, 33, 36, 0.94),
+        line: .rgba(255, 255, 255, 0.10), lineStrong: .rgba(255, 255, 255, 0.35),
+        text1: Color(hex: 0xEEEEEE), text2: Color(hex: 0xB3B3B3), text3: Color(hex: 0x8E9096),
+        accent: Color(hex: 0xFFFFFF), accentFill: Color(hex: 0xFFFFFF), onAccent: Color(hex: 0x1A1B1E),
+        selection: Color(hex: 0xFFFFFF), selectionFill: .rgba(255, 255, 255, 0.10), focus: Color(hex: 0xFFFFFF),
+        success: Color(hex: 0x7CC992), warning: Color(hex: 0xE6C35C), danger: Color(hex: 0xF0786C), edge: Color(hex: 0x8E9096),
+        keyFill: .rgba(255, 255, 255, 0.18), keyLine: .clear, keyText: Color(hex: 0xFFFFFF),
+        toastFill: Color(hex: 0xFFFFFF),
+        histR: Color(hex: 0xFF5A52), histG: Color(hex: 0x4ED36A), histB: Color(hex: 0x4C8DFF),
+        clipHigh: Color(hex: 0xFF4D4D), clipLow: Color(hex: 0x4D8DFF)
     )
 }
 
@@ -177,63 +185,75 @@ nonisolated struct Theme: Sendable {
     let isLight: Bool
     let c: ThemePalette
 
+    /// `light` — хочется светлого (режим оформления); «Световой стол» светлый всегда, кроме просмотра (`light: false`)
     static func make(_ direction: ThemeDirection, light: Bool) -> Theme {
-        let useLight = light && direction.hasLight
+        let useLight = light && (direction.hasLight || direction.alwaysLight)
         let palette: ThemePalette
         switch (direction, useLight) {
-        case (.studio, false): palette = .studio
-        case (.studio, true): palette = .studioLight
+        case (.film, _): palette = .film
         case (.glass, false): palette = .glass
         case (.glass, true): palette = .glassLight
-        case (.quiet, _): palette = .quiet
-        case (.contact, _): palette = .contact
+        case (.neutral, _): palette = .neutral
+        case (.table, false): palette = .tableDark
+        case (.table, true): palette = .table
         }
         return Theme(direction: direction, isLight: useLight, c: palette)
     }
 
-    static let `default` = Theme.make(.studio, light: false)
+    /// Стартовое окно, сетка и настройки: учитывает, что «Световой стол» светлый всегда
+    static func chrome(_ direction: ThemeDirection, wantsLight: Bool) -> Theme {
+        make(direction, light: direction.alwaysLight || wantsLight)
+    }
 
-    var isStudio: Bool { direction == .studio }
+    static let `default` = Theme.make(.neutral, light: false)
+
+    var isFilm: Bool { direction == .film }
     var isGlass: Bool { direction == .glass }
-    var isQuiet: Bool { direction == .quiet }
-    var isContact: Bool { direction == .contact }
+    var isNeutral: Bool { direction == .neutral }
+    var isTable: Bool { direction == .table }
+
+    /// Красный карандаш «Плёнки»
+    var pen: Color { Color(hex: 0xF2493C) }
+
+    /// Нижний пульт «Светового стола» — тёмный и в сетке, и в просмотре
+    var trayFill: Color { Color(hex: 0x1A1B1E) }
 
     // MARK: Радиусы
 
     var rSm: CGFloat {
         switch direction {
-        case .studio: 3
+        case .film: 2
         case .glass: 8
-        case .quiet: 0
-        case .contact: 2
+        case .neutral: 4
+        case .table: 2
         }
     }
 
     var rMd: CGFloat {
         switch direction {
-        case .studio: 5
-        case .glass: 14
-        case .quiet: 2
-        case .contact: 4
+        case .film: 5
+        case .glass: 18
+        case .neutral: 7
+        case .table: 10
         }
     }
 
     var rLg: CGFloat {
         switch direction {
-        case .studio: 8
-        case .glass: 24
-        case .quiet: 4
-        case .contact: 8
+        case .film: 12
+        case .glass: 32
+        case .neutral: 10
+        case .table: 18
         }
     }
 
     /// Радиус кнопок и полей; у «Стекла» кнопки — капсулы (считается от высоты)
     var rControl: CGFloat {
         switch direction {
-        case .studio: 5
+        case .film: 7
         case .glass: 999
-        case .quiet: 2
-        case .contact: 4
+        case .neutral: 6
+        case .table: 9
         }
     }
 
@@ -241,20 +261,20 @@ nonisolated struct Theme: Sendable {
 
     var topbarHeight: CGFloat {
         switch direction {
-        case .studio: 36
+        case .film: 56
         case .glass: 52
-        case .quiet: 28
-        case .contact: 44
+        case .neutral: 44
+        case .table: 64
         }
     }
 
     /// Высота строки подсказок (у «Стекла» — капсула с отступом снизу)
     var hintbarHeight: CGFloat {
         switch direction {
-        case .studio: 30
-        case .glass: 44
-        case .quiet: 32
-        case .contact: 40
+        case .film: 52
+        case .glass: 54
+        case .neutral: 34
+        case .table: 48
         }
     }
 
@@ -265,10 +285,10 @@ nonisolated struct Theme: Sendable {
 
     var panelWidth: CGFloat {
         switch direction {
-        case .studio: 300
-        case .glass: 320
-        case .quiet: 280
-        case .contact: 312
+        case .film: 320
+        case .glass: 332
+        case .neutral: 300
+        case .table: 320
         }
     }
 
@@ -277,45 +297,68 @@ nonisolated struct Theme: Sendable {
         isGlass ? panelWidth + 24 : panelWidth
     }
 
+    /// Зазор между ячейками по горизонтали; у «Плёнки» кадры идут лентой
     var gridGap: CGFloat {
         switch direction {
-        case .studio: 4
+        case .film: 2
+        case .glass: 8
+        case .neutral: 12
+        case .table: 22
+        }
+    }
+
+    /// Зазор между рядами
+    var gridRowGap: CGFloat {
+        switch direction {
+        case .film: 20
+        case .glass: 8
+        case .neutral: 16
+        case .table: 24
+        }
+    }
+
+    /// Поля сетки по краям
+    var gridPadding: CGFloat {
+        switch direction {
+        case .film: 28
         case .glass: 12
-        case .quiet: 2
-        case .contact: 10
+        case .neutral: 18
+        case .table: 40
         }
     }
 
     /// Поля вокруг фото в просмотре: по горизонтали и вертикали
     var stageInsets: (h: CGFloat, v: CGFloat) {
         switch direction {
-        case .studio: (40, 64)
-        case .glass: (24, 76)
-        case .quiet: (0, 30)
-        case .contact: (40, 64)
+        case .film: (40, 64)
+        case .glass: (24, 84)
+        case .neutral: (32, 24)
+        case .table: (40, 66)
         }
     }
 
-    /// Интерфейс поверх фото прячется через 2 с простоя
-    var autoHidesHUD: Bool { isGlass || isQuiet }
-
     // MARK: Шрифты
+
+    /// Узкий шрифт номеров плёнки
+    static func condensed(_ size: CGFloat, _ weight: Font.Weight = .semibold) -> Font {
+        .system(size: size, weight: weight).width(.condensed)
+    }
 
     var titleFont: Font {
         switch direction {
-        case .studio: .system(size: 20, weight: .semibold)
-        case .glass: .system(size: 26, weight: .bold)
-        case .quiet: .system(size: 30, weight: .light)
-        case .contact: .system(size: 30, weight: .semibold, design: .serif)
+        case .film: .system(size: 28, weight: .semibold)
+        case .glass: .system(size: 36, weight: .bold)
+        case .neutral: .system(size: 24, weight: .semibold)
+        case .table: .system(size: 40, weight: .bold)
         }
     }
 
     var headingFont: Font {
         switch direction {
-        case .studio: .system(size: 13, weight: .semibold)
-        case .glass: .system(size: 15, weight: .semibold)
-        case .quiet: .system(size: 13, weight: .medium)
-        case .contact: .system(size: 15, weight: .semibold, design: .serif)
+        case .film: .system(size: 15, weight: .semibold)
+        case .glass: .system(size: 19, weight: .bold)
+        case .neutral: .system(size: 14, weight: .semibold)
+        case .table: .system(size: 16, weight: .semibold)
         }
     }
 
@@ -323,74 +366,73 @@ nonisolated struct Theme: Sendable {
 
     var captionFont: Font { .system(size: 11) }
 
-    /// Метки секций: СЪЁМКА, ФАЙЛ
+    /// Подписи секций: «Съёмка», «Камера»
     var labelFont: Font {
         switch direction {
-        case .studio: .system(size: 10.5, weight: .semibold)
-        case .glass: .system(size: 11, weight: .semibold)
-        case .quiet: .system(size: 10, weight: .medium)
-        case .contact: .system(size: 10, weight: .semibold, design: .monospaced)
+        case .film: .system(size: 13, weight: .semibold)
+        case .glass: .system(size: 13, weight: .semibold)
+        case .neutral: .system(size: 12, weight: .semibold)
+        case .table: .system(size: 13, weight: .semibold)
         }
     }
 
-    var labelTracking: CGFloat {
+    var labelTracking: CGFloat { 0 }
+
+    var labelUppercased: Bool { false }
+
+    var labelColor: Color {
         switch direction {
-        case .studio: 0.63
-        case .glass: 0
-        case .quiet: 1.2
-        case .contact: 1.0
+        case .film, .table: c.text1
+        case .glass: c.text2
+        case .neutral: c.text3
         }
     }
-
-    var labelUppercased: Bool { !isGlass }
-
-    var labelColor: Color { isContact ? c.edge : (isGlass ? c.text2 : c.text3) }
 
     /// Счётчик, проценты — цифры не прыгают
     var numFont: Font {
         switch direction {
-        case .studio: .system(size: 12, weight: .medium, design: .monospaced)
-        case .glass: .system(size: 13, weight: .semibold, design: .rounded).monospacedDigit()
-        case .quiet: .system(size: 11, design: .monospaced)
-        case .contact: .system(size: 11, weight: .semibold, design: .monospaced)
+        case .film: Theme.condensed(18).monospacedDigit()
+        case .glass: .system(size: 13, weight: .semibold).monospacedDigit()
+        case .neutral: .system(size: 13).monospacedDigit()
+        case .table: .system(size: 13).monospacedDigit()
         }
     }
 
     var exifFont: Font {
         switch direction {
-        case .studio: .system(size: 17, weight: .medium, design: .monospaced)
-        case .glass: .system(size: 19, weight: .semibold, design: .rounded).monospacedDigit()
-        case .quiet: .system(size: 22, weight: .light).monospacedDigit()
-        case .contact: .system(size: 19, weight: .semibold, design: .serif).monospacedDigit()
+        case .film: Theme.condensed(30).monospacedDigit()
+        case .glass: .system(size: 21, weight: .bold).monospacedDigit()
+        case .neutral: .system(size: 15, weight: .semibold).monospacedDigit()
+        case .table: .system(size: 24, weight: .semibold).monospacedDigit()
         }
     }
 
     var keyFont: Font {
         switch direction {
-        case .studio: .system(size: 11, weight: .semibold, design: .monospaced)
-        case .glass: .system(size: 12, weight: .bold, design: .rounded)
-        case .quiet: .system(size: 11, weight: .medium, design: .monospaced)
-        case .contact: .system(size: 11, weight: .semibold, design: .monospaced)
+        case .glass: .system(size: 12, weight: .bold)
+        default: .system(size: 11.5, weight: .semibold)
         }
     }
 
     var toastFont: Font {
         switch direction {
-        case .studio: .system(size: 15, weight: .semibold)
-        case .glass: .system(size: 17, weight: .semibold, design: .rounded)
-        case .quiet: .system(size: 30, weight: .light)
-        case .contact: .system(size: 14, weight: .bold, design: .monospaced)
+        case .film: .system(size: 18, weight: .semibold)
+        case .glass: .system(size: 19, weight: .semibold)
+        case .neutral: .system(size: 16, weight: .semibold)
+        case .table: .system(size: 17, weight: .semibold)
         }
     }
 
     /// Номера кадров, «краевая печать»
-    var edgeFont: Font { .system(size: 10, weight: .semibold, design: .monospaced) }
+    var edgeFont: Font { Theme.condensed(15) }
 }
 
 extension EnvironmentValues {
     @Entry var theme: Theme = .default
     /// Клавиша лежит на акцентной заливке (внутри главной кнопки)
     @Entry var keyOnAccent: Bool = false
+    /// Клавиша лежит на тёмном пульте «Светового стола»
+    @Entry var keyOnTray: Bool = false
 }
 
 extension View {
@@ -398,10 +440,10 @@ extension View {
     func themed(_ theme: Theme) -> some View {
         environment(\.theme, theme)
             .environment(\.colorScheme, theme.isLight ? .light : .dark)
-            .tint(theme.c.accentFill)
+            .tint(theme.isNeutral || theme.isTable || theme.isFilm ? theme.c.text2 : theme.c.accentFill)
     }
 
-    /// Метка секции в стиле темы (капитель с разрядкой и т. п.)
+    /// Подпись секции в стиле темы
     func themeLabel(_ theme: Theme) -> some View {
         font(theme.labelFont)
             .tracking(theme.labelTracking)
@@ -436,5 +478,15 @@ struct WindowAppearance: NSViewRepresentable {
         DispatchQueue.main.async {
             view.window?.appearance = appearance
         }
+    }
+}
+
+/// «Нейтраль»: фон под фото в просмотре — от чёрного до светло-серого, все без оттенка
+nonisolated enum SurroundTone {
+    static let tones: [UInt32] = [0x000000, 0x1E1E1E, 0x2B2B2B, 0x767676, 0xBDBDBD]
+    static let titles = ["Чёрный", "Тёмный", "Серый", "Средне-серый 18 %", "Светлый"]
+
+    static func color(_ index: Int) -> Color {
+        Color(hex: tones[min(max(index, 0), tones.count - 1)])
     }
 }

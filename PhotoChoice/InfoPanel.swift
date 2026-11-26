@@ -5,6 +5,10 @@ struct InfoPanel: View {
     let url: URL
     /// Остальные файлы кадра (пара RAW + JPEG)
     var companions: [URL] = []
+    /// «Нейтраль» в просмотре: выбор фона под фото
+    var showsSurround = false
+    /// `session.editRevision`: кадр сохранили в другой программе — перечитать
+    var revision = 0
 
     @Environment(\.theme) private var theme
     @State private var details: PhotoDetails?
@@ -13,6 +17,7 @@ struct InfoPanel: View {
     /// Подсветка на кадре в просмотре и сравнении, как в Lightroom: клик по треугольнику на гистограмме
     @AppStorage("clipShadows") private var clipShadows = false
     @AppStorage("clipHighlights") private var clipHighlights = false
+    @AppStorage(Pref.surroundTone) private var surroundTone = 2
 
     /// Ширина по умолчанию (у каждой темы своя — `theme.panelWidth`)
     static let width: CGFloat = 300
@@ -22,6 +27,9 @@ struct InfoPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
+                if showsSurround && theme.isNeutral {
+                    surroundPicker
+                }
                 histogram
                 exposure
                 if paletteEnabled {
@@ -49,12 +57,13 @@ struct InfoPanel: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(.horizontal, theme.isGlass ? 22 : 18)
+            .padding(.vertical, theme.isGlass ? 22 : 16)
         }
         .scrollIndicators(.visible)
         .frame(width: theme.panelWidth)
         .background { panelBackground }
-        .task(id: url) {
+        .task(id: "\(url.path)#\(revision)") {
             details = PhotoDetailsLoader.cached(url)
             guard details == nil else { return }
             let loaded = await PhotoDetailsLoader.load(url)
@@ -67,14 +76,18 @@ struct InfoPanel: View {
         let c = theme.c
         switch theme.direction {
         case .glass:
-            Color.clear.themedPanel(theme)
-        case .quiet:
-            c.overlay
-        case .studio, .contact:
+            Color.clear.themedPanel(theme, cornerRadius: 32)
+        case .film:
+            Color(hex: 0x131313)
+        case .neutral:
             c.surface1
-                .overlay(alignment: .leading) {
-                    Rectangle().fill(c.line).frame(width: 1)
-                }
+        case .table:
+            if theme.isLight {
+                Color.white
+                    .shadow(color: Color.black.opacity(0.12), radius: 16, x: -8)
+            } else {
+                c.surface1
+            }
         }
     }
 
@@ -85,7 +98,7 @@ struct InfoPanel: View {
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Сведения")
-                    .font(theme.isContact ? .system(size: 15, weight: .semibold, design: .serif) : .system(size: 13, weight: .semibold))
+                    .font(headerFont)
                     .foregroundStyle(c.text1)
                 Spacer()
                 Button {
@@ -119,16 +132,62 @@ struct InfoPanel: View {
         }
     }
 
+    private var headerFont: Font {
+        switch theme.direction {
+        case .film: .system(size: 15, weight: .semibold)
+        case .glass: .system(size: 17, weight: .bold)
+        case .neutral: .system(size: 14, weight: .semibold)
+        case .table: .system(size: 18, weight: .semibold)
+        }
+    }
+
+    /// «Фон под фото»: пять серых без оттенка
+    private var surroundPicker: some View {
+        let c = theme.c
+        return HStack(spacing: 8) {
+            Text("Фон под фото")
+                .font(.system(size: 12.5))
+                .foregroundStyle(c.text2)
+            Spacer(minLength: 4)
+            ForEach(SurroundTone.tones.indices, id: \.self) { i in
+                Button {
+                    surroundTone = i
+                } label: {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(SurroundTone.color(i))
+                        .frame(width: 22, height: 22)
+                        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+                        .padding(2)
+                        .overlay {
+                            if surroundTone == i {
+                                RoundedRectangle(cornerRadius: 7).strokeBorder(Color(hex: 0xF0F0F0), lineWidth: 2)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help(SurroundTone.titles[i])
+            }
+        }
+    }
+
     // MARK: - Гистограмма
 
     private var histogramRadius: CGFloat {
-        theme.isGlass ? 12 : theme.rSm
+        switch theme.direction {
+        case .glass: 16
+        case .table: 8
+        case .film, .neutral: 6
+        }
     }
 
     private var histogramFill: Color {
-        if theme.isGlass && !theme.isLight { return Color.black.opacity(0.35) }
-        if theme.isQuiet { return .clear }
-        return theme.c.canvas
+        switch theme.direction {
+        case .glass: return theme.isLight ? Color.black.opacity(0.05) : Color.black.opacity(0.28)
+        case .film: return Color(hex: 0x0E0E0E)
+        case .neutral: return Color(hex: 0x1B1B1B)
+        case .table: return theme.isLight ? Color(hex: 0xF3F2EF) : Color(hex: 0x1B1B1B)
+        }
     }
 
     private var histogram: some View {
@@ -156,16 +215,6 @@ struct InfoPanel: View {
             .overlay(alignment: .topTrailing) {
                 clipToggle($clipHighlights, symbol: "arrowtriangle.up.fill", color: c.clipHigh,
                            help: "Показать пересветы на кадре красным")
-            }
-            .overlay {
-                if theme.isQuiet {
-                    VStack {
-                        Spacer()
-                        Rectangle().fill(c.lineStrong).frame(height: 1)
-                    }
-                } else if !theme.isLight {
-                    shape.stroke(c.line, lineWidth: 1)
-                }
             }
 
             if let histogram = details?.histogram {
@@ -229,7 +278,7 @@ struct InfoPanel: View {
             Image(systemName: symbol)
                 .font(.system(size: 7))
                 .foregroundStyle(color)
-                .opacity(warn || !theme.isQuiet ? 1 : 0.5)
+                .opacity(1)
             Text("\(title) \(number) %")
                 .font(.system(size: 11).monospacedDigit())
                 .fontWeight(warn ? .semibold : .regular)
@@ -240,7 +289,9 @@ struct InfoPanel: View {
     // MARK: - Четыре главных параметра
 
     private var exposure: some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
+        let columns = theme.isNeutral ? 4 : 2
+        let gap: CGFloat = theme.isGlass ? 10 : (theme.isNeutral ? 6 : 14)
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: gap), count: columns), alignment: .leading, spacing: gap) {
             exposureCell(details?.shutter, "Выдержка")
             exposureCell(details?.aperture, "Диафрагма")
             exposureCell(details?.iso, "ISO")
@@ -250,42 +301,23 @@ struct InfoPanel: View {
 
     private func exposureCell(_ value: String?, _ caption: String) -> some View {
         let c = theme.c
-        let radius = theme.isGlass ? 12 : theme.rSm
-        let shape = RoundedRectangle(cornerRadius: radius)
-        return VStack(alignment: .leading, spacing: 1) {
+        let shape = RoundedRectangle(cornerRadius: 18)
+        return VStack(alignment: .leading, spacing: theme.isFilm ? 5 : 2) {
             Text(value ?? "—")
                 .font(theme.exifFont)
-                .foregroundStyle(value == nil ? c.text3 : c.text1)
+                .tracking(theme.isFilm ? 0.6 : 0)
+                .foregroundStyle(value == nil ? c.text3 : (theme.isFilm ? c.edge : c.text1))
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Group {
-                if theme.isContact {
-                    Text(caption.uppercased()).themeLabel(theme)
-                } else {
-                    Text(caption)
-                        .font(.system(size: 11))
-                        .foregroundStyle(c.text3)
-                }
-            }
+                .minimumScaleFactor(0.6)
+            Text(caption)
+                .font(.system(size: theme.isNeutral ? 11 : 12))
+                .foregroundStyle(c.text3)
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, theme.isQuiet ? 0 : 10)
-        .padding(.vertical, theme.isQuiet ? 4 : 8)
-        .background(exposureFill, in: shape)
-        .overlay {
-            if theme.isContact {
-                shape.stroke(c.line, lineWidth: 1)
-            }
-        }
-    }
-
-    private var exposureFill: Color {
-        let c = theme.c
-        switch theme.direction {
-        case .studio: return theme.isLight ? c.app : c.surface2
-        case .glass: return theme.isLight ? Color.black.opacity(0.04) : Color.white.opacity(0.08)
-        case .quiet, .contact: return .clear
-        }
+        .padding(.horizontal, theme.isGlass ? 14 : 0)
+        .padding(.vertical, theme.isGlass ? 12 : 0)
+        .background(theme.isGlass ? Color.white.opacity(theme.isLight ? 0.5 : 0.08) : Color.clear, in: shape)
     }
 
     // MARK: - Секции
@@ -413,19 +445,14 @@ struct InfoPanel: View {
             .padding(.vertical, 8)
             .background(
                 theme.isLight ? Color.black.opacity(0.035) : Color.white.opacity(0.06),
-                in: RoundedRectangle(cornerRadius: 12)
+                in: RoundedRectangle(cornerRadius: 16)
             )
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                Text(section.title.uppercased())
+                Text(section.title)
                     .themeLabel(theme)
                     .padding(.top, 8)
                 rows
-            }
-            .overlay(alignment: .top) {
-                if !theme.isQuiet {
-                    Rectangle().fill(c.line).frame(height: 1)
-                }
             }
         }
     }
@@ -439,7 +466,7 @@ struct HistogramView: View {
 
     var body: some View {
         let c = theme.c
-        let opacity = theme.isQuiet ? 0.7 : 0.85
+        let opacity = theme.isLight ? 0.7 : 0.85
         Canvas { context, size in
             // Сетка по четвертям
             for quarter in 1..<4 {
@@ -447,10 +474,11 @@ struct HistogramView: View {
                 var line = Path()
                 line.move(to: CGPoint(x: x, y: 0))
                 line.addLine(to: CGPoint(x: x, y: size.height))
-                context.stroke(line, with: .color(.white.opacity(0.06)), lineWidth: 1)
+                context.stroke(line, with: .color(theme.isLight ? .black.opacity(0.06) : .white.opacity(0.06)), lineWidth: 1)
             }
 
-            context.blendMode = .screen
+            // На светлом фоне каналы складываются как краски, на тёмном — как свет
+            context.blendMode = theme.isLight ? .multiply : .screen
             context.fill(area(histogram.red, size), with: .color(c.histR.opacity(opacity)))
             context.fill(area(histogram.green, size), with: .color(c.histG.opacity(opacity)))
             context.fill(area(histogram.blue, size), with: .color(c.histB.opacity(opacity)))

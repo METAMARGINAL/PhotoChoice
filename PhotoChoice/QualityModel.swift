@@ -21,7 +21,7 @@ nonisolated final class QualityModel: @unchecked Sendable {
 
     /// Настройка «Модель MobileCLIP», по умолчанию вкл.
     static var isEnabled: Bool {
-        isBundled && (UserDefaults.standard.object(forKey: "qualityModelEnabled") as? Bool ?? true)
+        isBundled && UserDefaults.standard.bool(forKey: Pref.qualityModelEnabled)
     }
 
     private static let loading = NSLock()

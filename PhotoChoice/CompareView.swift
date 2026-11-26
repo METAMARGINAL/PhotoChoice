@@ -11,7 +11,10 @@ struct CompareView: View {
     @Bindable var session: PhotoSession
 
     @Environment(\.theme) private var theme
-    @AppStorage("marksEnabled") private var marksEnabled = false
+    @AppStorage(Feature.stars.key) private var starsOn = false
+    @AppStorage(Feature.colors.key) private var colorsOn = false
+    @AppStorage(Feature.flags.key) private var flagsOn = false
+    @AppStorage(Feature.info.key) private var infoOn = true
     @AppStorage("clipHighlights") private var clipHighlights = false
     @AppStorage("clipShadows") private var clipShadows = false
 
@@ -57,8 +60,8 @@ struct CompareView: View {
                     ToastOverlay(toast: session.toast)
                 }
 
-                if session.showInfo, let url = session.currentPhoto {
-                    InfoPanel(url: url, companions: session.companions(of: url))
+                if infoOn, session.showInfo, let url = session.currentPhoto {
+                    InfoPanel(url: url, companions: session.companions(of: url), revision: session.editRevision)
                         .padding(theme.isGlass ? 12 : 0)
                         .transition(.move(edge: .trailing))
                 }
@@ -81,8 +84,8 @@ struct CompareView: View {
                 onCopy: { session.copyAnnotated() }
             )
         )
-        .task(id: session.compareLeft) { await loadImage(.left) }
-        .task(id: session.compareRight) { await loadImage(.right) }
+        .task(id: "\(session.compareLeft?.path ?? "")#\(session.editRevision)") { await loadImage(.left) }
+        .task(id: "\(session.compareRight?.path ?? "")#\(session.editRevision)") { await loadImage(.right) }
     }
 
     // MARK: - Половина экрана
@@ -91,7 +94,7 @@ struct CompareView: View {
     private var paneInsets: EdgeInsets {
         theme.isGlass
             ? EdgeInsets(top: 72, leading: 16, bottom: 80, trailing: 16)
-            : EdgeInsets(top: theme.isQuiet ? 28 : 36, leading: theme.isQuiet ? 0 : 16, bottom: 16, trailing: theme.isQuiet ? 0 : 16)
+            : EdgeInsets(top: 36, leading: 16, bottom: 16, trailing: 16)
     }
 
     private func pane(_ side: CompareSide) -> some View {
@@ -134,7 +137,7 @@ struct CompareView: View {
             .overlay(alignment: theme.isGlass ? .bottom : .topLeading) {
                 if let url {
                     PaneHeader(url: url, side: side, position: position(of: url), isActive: isActive,
-                               mark: marksEnabled ? MarkStore.shared.mark(url) : nil,
+                               mark: starsOn || colorsOn || flagsOn ? MarkStore.shared.mark(url) : nil,
                                onMark: { session.applyMark($0, to: [url]) })
                         .padding(theme.isGlass ? EdgeInsets(top: 0, leading: 0, bottom: 84, trailing: 0)
                                               : EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
@@ -144,7 +147,7 @@ struct CompareView: View {
                 if abs(t.zoom - 1) > 0.01 {
                     Text("\(Int((t.zoom * 100).rounded()))%")
                         .font(theme.numFont)
-                        .foregroundStyle(theme.isContact ? c.edge : c.text2)
+                        .foregroundStyle(theme.isFilm ? c.edge : c.text2)
                         .padding(theme.isGlass ? EdgeInsets(top: 0, leading: 0, bottom: 92, trailing: 24)
                                               : EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 12))
                 }
@@ -172,13 +175,11 @@ struct CompareView: View {
                     .strokeBorder(c.selection, lineWidth: 3)
                     .padding(8)
                     .allowsHitTesting(false)
-            case .quiet:
-                VStack {
-                    Rectangle().fill(c.selection).frame(height: 1.5)
-                    Spacer()
-                }
-                .allowsHitTesting(false)
-            case .studio, .contact:
+            case .film:
+                Rectangle()
+                    .strokeBorder(theme.pen, lineWidth: 2)
+                    .allowsHitTesting(false)
+            case .neutral, .table:
                 Rectangle()
                     .strokeBorder(c.selection, lineWidth: 2)
                     .allowsHitTesting(false)
@@ -211,7 +212,7 @@ struct CompareView: View {
 
             capsuleGroup(text: true) {
                 Text("Сравнение")
-                    .font(theme.isContact ? .system(size: 15, weight: .semibold, design: .serif) : .system(size: 13, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(c.text1)
             }
 
@@ -233,9 +234,6 @@ struct CompareView: View {
                 .controlSize(.mini)
             }
 
-            if theme.isStudio {
-                Rectangle().fill(c.line).frame(width: 1, height: 16)
-            }
 
             capsuleGroup {
                 HStack(spacing: 6) {
@@ -266,14 +264,7 @@ struct CompareView: View {
         .padding(.horizontal, theme.isGlass ? 16 : 12)
         .padding(.top, theme.isGlass ? 12 : 0)
         .frame(height: topbarHeight)
-        .background {
-            if theme.isStudio || theme.isContact {
-                c.surface1
-                    .overlay(alignment: .bottom) {
-                        Rectangle().fill(c.line).frame(height: 1)
-                    }
-            }
-        }
+        .background(theme.isNeutral ? Color(hex: 0x222222) : Color.clear)
     }
 
     private var hints: some View {
@@ -282,10 +273,7 @@ struct CompareView: View {
                 Hint("←", "→", label: "листать"),
                 Hint("Tab", label: "сторона")
             ]),
-            HintGroup(title: "Отбор", hints: [
-                Hint("1–9", label: "в папку"),
-                Hint("⌫", label: "корзина")
-            ]),
+            HintGroup.targets(session),
             HintGroup(title: "Сравнение", hints: [
                 Hint("L", label: "синхр. зум"),
                 Hint("X", label: "поменять"),
@@ -321,8 +309,7 @@ struct CompareView: View {
     private var dividerWidth: CGFloat {
         switch theme.direction {
         case .glass: 0
-        case .quiet: 1
-        case .studio, .contact: 2
+        case .film, .neutral, .table: 2
         }
     }
 
@@ -546,7 +533,8 @@ struct CompareView: View {
         case 3: // F — к сетке
             session.toggleViewMode()
         case 34: // I
-            withAnimation(.easeOut(duration: 0.2)) { session.showInfo.toggle() }
+            guard infoOn else { return false }
+            withAnimation(.easeOut(duration: 0.22)) { session.showInfo.toggle() }
         case 123: // ←
             session.compareStep(-1)
         case 124, 49: // →, пробел
@@ -617,12 +605,12 @@ private struct PaneHeader: View {
             badge
             if side == .left {
                 Text(theme.isGlass ? "Эталон" : "ЭТАЛОН")
-                    .font(theme.isContact ? theme.edgeFont : .system(size: 10.5, weight: .semibold))
+                    .font(theme.isFilm ? theme.edgeFont : .system(size: 10.5, weight: .semibold))
                     .tracking(theme.isGlass ? 0 : 0.6)
-                    .foregroundStyle(theme.isContact ? c.edge : c.text3)
+                    .foregroundStyle(theme.isFilm ? c.edge : c.text3)
             }
             Text("\(url.lastPathComponent) · \(position)")
-                .font(theme.isContact ? .system(size: 12, design: .monospaced) : .system(size: 12))
+                .font(.system(size: 12))
                 .foregroundStyle(isActive ? c.text1 : c.text2)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -637,7 +625,8 @@ private struct PaneHeader: View {
                     mark: mark,
                     size: 11,
                     onRating: { onMark(.rating($0)) },
-                    onColor: { onMark(.color($0)) }
+                    onColor: { onMark(.color($0)) },
+                    onFlag: { onMark(.flag($0)) }
                 )
             }
         }
@@ -669,9 +658,9 @@ private struct PaneHeader: View {
         let c = theme.c
         let letter = side == .left ? "A" : "B"
         let shape = RoundedRectangle(cornerRadius: theme.isGlass ? 11 : theme.rSm)
-        let fill: Color = isActive ? (theme.isQuiet ? .clear : c.accentFill) : (theme.isQuiet || theme.isContact ? .clear : c.surface2)
-        let stroke: Color = isActive ? (theme.isQuiet ? .clear : c.accentFill) : (theme.isQuiet ? .clear : (theme.isContact ? c.edge : c.lineStrong))
-        let text: Color = isActive ? (theme.isQuiet ? c.text1 : c.onAccent) : (theme.isContact ? c.edge : c.text1)
+        let fill: Color = isActive ? c.accentFill : (theme.isFilm ? .clear : c.surface2)
+        let stroke: Color = isActive ? c.accentFill : (theme.isFilm ? c.edge : c.lineStrong)
+        let text: Color = isActive ? c.onAccent : (theme.isFilm ? c.edge : c.text1)
         return Text(letter)
             .font(theme.isGlass ? .system(size: 12, weight: .bold, design: .rounded) : .system(size: 12, weight: .bold, design: .monospaced))
             .foregroundStyle(text)

@@ -56,6 +56,7 @@ nonisolated enum PeopleGrouping {
         var identities: [Face] = []
         var prints: [Face] = []
         for item in items {
+            if Task.isCancelled { return [] }
             for (i, face) in item.metrics.faces.enumerated() {
                 let area = Double(face.rect.width * face.rect.height)
                 let frontal = abs(face.yaw ?? 0) <= 25 ? 1.0 : 0.4
@@ -71,7 +72,9 @@ nonisolated enum PeopleGrouping {
         }
         // Расстояние между единичными векторами: d² = 2 − 2·(a·b) — порог Vision переводим в скалярное произведение
         let printDot = Float(1 - maxDistance * maxDistance / 2)
-        let found = group(identities, minDot: identityThreshold(maxDistance)) + group(prints, minDot: printDot)
+        let recognized = group(identities, minDot: identityThreshold(maxDistance))
+        guard !Task.isCancelled else { return [] }
+        let found = recognized + group(prints, minDot: printDot)
         return found.sorted { $0.photos.count > $1.photos.count }
     }
 
@@ -114,12 +117,18 @@ nonisolated enum PeopleGrouping {
         }
 
         // 1. Первый проход: хорошие лица по убыванию качества
-        for i in core { place(i) }
+        for i in core {
+            if Task.isCancelled { return [] }
+            place(i)
+        }
 
         // 2. Уточнение: центры уже собраны по всем лицам — раскладываем заново, ошибки первого прохода уходят
         for _ in 0..<2 {
             groups = groups.map { Group(sum: $0.center, center: $0.center) }
-            for i in core { place(i) }
+            for i in core {
+                if Task.isCancelled { return [] }
+                place(i)
+            }
             groups.removeAll { $0.members.isEmpty }
         }
 
@@ -129,14 +138,8 @@ nonisolated enum PeopleGrouping {
         let mergeDot = minDot + 0.1
         if groups.count > 1 {
             let n = groups.count
-            let dots = gram(groups.map(\.center))
-            var pairs: [(a: Int, b: Int, dot: Float)] = []
-            for a in 0..<n {
-                for b in (a + 1)..<n where dots[a * n + b] >= mergeDot {
-                    pairs.append((a, b, dots[a * n + b]))
-                }
-            }
-            pairs.sort { $0.dot > $1.dot }
+            let pairs = mergePairs(groups.map(\.center), threshold: mergeDot)
+            guard !Task.isCancelled else { return [] }
             var owner = Array(0..<n)
             func root(_ i: Int) -> Int {
                 var i = i
@@ -144,6 +147,7 @@ nonisolated enum PeopleGrouping {
                 return i
             }
             for pair in pairs {
+                if Task.isCancelled { return [] }
                 let a = root(pair.a), b = root(pair.b)
                 // Центры после прошлых слияний сдвинулись — проверяем ещё раз
                 guard a != b, groups[a].photos.isDisjoint(with: groups[b].photos),
@@ -157,6 +161,7 @@ nonisolated enum PeopleGrouping {
 
         // 4. Слабые лица только присоединяются, с запасом по порогу
         for i in weak {
+            if Task.isCancelled { return [] }
             if let g = best(i, minDot + 0.05) { add(i, to: g) }
         }
 
@@ -172,20 +177,41 @@ nonisolated enum PeopleGrouping {
 
     // MARK: Помощники
 
-    /// Попарные скалярные произведения векторов одной длины: n × n, построчно
-    private static func gram(_ vectors: [[Float]]) -> [Float] {
-        let n = vectors.count
-        guard let d = vectors.first?.count, d > 0 else { return [] }
-        let rows = vectors.flatMap { $0 }
-        var columns = [Float](repeating: 0, count: n * d)
-        for i in 0..<n {
-            for k in 0..<d {
-                columns[k * n + i] = rows[i * d + k]
+    /// Проверяем все пары с тем же порогом, но матрица расстояний хранится
+    /// блоками до 8 МБ. В памяти остаются только кандидаты на слияние.
+    private static func mergePairs(_ vectors: [[Float]], threshold: Float) -> [(a: Int, b: Int, dot: Float)] {
+        var pairs: [(a: Int, b: Int, dot: Float)] = []
+        let dimensions = Dictionary(grouping: vectors.indices, by: { vectors[$0].count })
+        for (d, indices) in dimensions where d > 0 && indices.count > 1 {
+            let n = indices.count
+            let rows = indices.flatMap { vectors[$0] }
+            var columns = [Float](repeating: 0, count: n * d)
+            for i in 0..<n {
+                for k in 0..<d {
+                    columns[k * n + i] = rows[i * d + k]
+                }
+            }
+            let blockRows = min(n, max(1, 2_000_000 / n))
+            for start in stride(from: 0, to: n, by: blockRows) {
+                if Task.isCancelled { return [] }
+                let count = min(blockRows, n - start)
+                var dots = [Float](repeating: 0, count: count * n)
+                rows.withUnsafeBufferPointer { buffer in
+                    vDSP_mmul(buffer.baseAddress! + start * d, 1, columns, 1, &dots, 1,
+                              vDSP_Length(count), vDSP_Length(n), vDSP_Length(d))
+                }
+                for a in start..<(start + count) {
+                    for b in (a + 1)..<n where dots[(a - start) * n + b] >= threshold {
+                        pairs.append((indices[a], indices[b], dots[(a - start) * n + b]))
+                    }
+                }
             }
         }
-        var result = [Float](repeating: 0, count: n * n)
-        vDSP_mmul(rows, 1, columns, 1, &result, 1, vDSP_Length(n), vDSP_Length(n), vDSP_Length(d))
-        return result
+        return pairs.sorted {
+            if $0.dot != $1.dot { return $0.dot > $1.dot }
+            if $0.a != $1.a { return $0.a < $1.a }
+            return $0.b < $1.b
+        }
     }
 
     private static func normalized(_ data: Data?) -> [Float]? {

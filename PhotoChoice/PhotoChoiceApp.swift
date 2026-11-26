@@ -1,12 +1,28 @@
+import AppKit
 import SwiftUI
 
 @main
 struct PhotoChoiceApp: App {
-    @State private var session = PhotoSession()
+    @State private var session: PhotoSession
+    @AppStorage(Feature.transfer.key) private var transferOn = true
+    @AppStorage(Feature.compare.key) private var compareOn = true
+    @AppStorage(Feature.drawing.key) private var drawingOn = true
+    @AppStorage(Feature.adjust.key) private var adjustOn = true
+    @AppStorage(Feature.info.key) private var infoOn = true
+
+    init() {
+        // Умолчания и миграция — до первого чтения настроек
+        Pref.register()
+        _session = State(initialValue: PhotoSession())
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView(session: session)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    // Вернулись из другой программы — подхватить сохранённые там правки
+                    session.reloadEditedExternally()
+                }
         }
         .defaultSize(width: 980, height: 680)
         .commands {
@@ -23,34 +39,52 @@ struct PhotoChoiceApp: App {
                 }
                 .disabled(!session.isViewing)
 
-                Button(session.showInfo ? "Скрыть сведения (I)" : "Сведения о снимке (I)") {
-                    session.showInfo.toggle()
+                if infoOn {
+                    Button(session.showInfo ? "Скрыть сведения (I)" : "Сведения о снимке (I)") {
+                        session.showInfo.toggle()
+                    }
+                    .disabled(!session.isViewing)
                 }
-                .disabled(!session.isViewing)
 
-                Divider()
-
-                Button(session.viewMode == .compare ? "Закончить сравнение (C)" : "Сравнить кадры (C)") {
-                    session.toggleCompare()
+                if compareOn || drawingOn || adjustOn {
+                    Divider()
                 }
-                .disabled(!session.isViewing || session.photos.count < 2)
 
-                Button(session.isDrawing ? "Закончить рисование (D)" : "Рисовать (D)") {
-                    session.toggleDrawing()
+                if compareOn {
+                    Button(session.viewMode == .compare ? "Закончить сравнение (C)" : "Сравнить кадры (C)") {
+                        session.toggleCompare()
+                    }
+                    .disabled(!session.isViewing || session.photos.count < 2)
                 }
-                .disabled(!session.isViewing || session.viewMode != .single)
 
-                Button("Сохранить копию с пометками…") {
-                    session.saveAnnotated()
-                }
-                .keyboardShortcut("s", modifiers: [.command])
-                .disabled(!session.isViewing || session.viewMode != .single)
+                if drawingOn {
+                    Button(session.isDrawing ? "Закончить рисование (D)" : "Рисовать (D)") {
+                        session.toggleDrawing()
+                    }
+                    .disabled(!session.isViewing || session.viewMode != .single)
 
-                Button("Копировать с пометками") {
-                    session.copyAnnotated()
+                    Button("Копировать с пометками") {
+                        session.copyAnnotated()
+                    }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .disabled(!session.isViewing || session.viewMode != .single)
                 }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-                .disabled(!session.isViewing || session.viewMode != .single)
+
+                if adjustOn {
+                    Button(session.isAdjusting ? "Закончить коррекцию (E)" : "Коррекция (E)") {
+                        session.toggleAdjusting()
+                    }
+                    .disabled(!session.isViewing || session.viewMode != .single)
+                }
+
+                if drawingOn || adjustOn {
+                    // В коррекции — копия с ней, иначе — с пометками
+                    Button(session.isAdjusting ? "Сохранить копию с коррекцией…" : "Сохранить копию…") {
+                        session.saveCopy()
+                    }
+                    .keyboardShortcut("s", modifiers: [.command])
+                    .disabled(!session.isViewing || session.viewMode != .single)
+                }
 
                 Divider()
 
@@ -94,28 +128,30 @@ struct PhotoChoiceApp: App {
 
                 Divider()
 
-                Button("В первую папку") {
-                    session.moveCurrentToPrimary()
+                if transferOn {
+                    Button("В первую папку") {
+                        session.moveCurrentToPrimary()
+                    }
+                    .keyboardShortcut("1", modifiers: [])
+                    .disabled(!session.isViewing || session.isEditingText)
                 }
-                .keyboardShortcut("1", modifiers: [])
-                .disabled(!session.isViewing)
 
                 Button("В корзину") {
                     session.trashCurrent()
                 }
                 .keyboardShortcut(.delete, modifiers: [])
-                .disabled(!session.isViewing)
+                .disabled(!session.isViewing || session.isEditingText)
 
                 Button("Отменить") {
                     session.undo()
                 }
                 .keyboardShortcut("z", modifiers: [.command])
-                .disabled(!session.isViewing)
+                .disabled(!session.isViewing || session.isEditingText)
             }
         }
 
         Settings {
-            SettingsRoot()
+            SettingsRoot(session: session)
         }
     }
 }

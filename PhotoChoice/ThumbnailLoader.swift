@@ -36,8 +36,8 @@ enum ThumbnailLoader {
     /// Ограничиваем число одновременных декодов, иначе RAW‑файлы кладут диск и CPU
     private nonisolated static let queue: OperationQueue = {
         let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 4
         queue.qualityOfService = .userInitiated
+        BackgroundWork.configure(queue, nominal: 3, fair: 2)
         return queue
     }()
 
@@ -79,7 +79,7 @@ enum ThumbnailLoader {
                 continuation.resume(returning: nil)
                 return
             }
-            continuation.resume(returning: makeThumbnail(url))
+            continuation.resume(returning: autoreleasepool { makeThumbnail(url) })
         }
     }
 

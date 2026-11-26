@@ -61,9 +61,7 @@ struct CalibrationPanel: View {
         switch theme.direction {
         case .glass:
             Color.clear.themedPanel(theme)
-        case .quiet:
-            c.overlay
-        case .studio, .contact:
+        case .film, .neutral, .table:
             c.surface1
                 .overlay(alignment: .leading) {
                     Rectangle().fill(c.line).frame(width: 1)
@@ -248,7 +246,7 @@ struct CalibrationPanel: View {
         }
         .font(.system(size: 12).monospacedDigit())
         .padding(10)
-        .background(c.surface2.opacity(theme.isQuiet ? 0 : 1), in: RoundedRectangle(cornerRadius: theme.rSm))
+        .background(c.surface2, in: RoundedRectangle(cornerRadius: theme.rSm))
     }
 
     // MARK: Карточка причины

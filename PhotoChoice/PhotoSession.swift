@@ -31,6 +31,8 @@ struct HistoryEntry {
 enum UndoStep {
     case move(HistoryEntry)
     case marks([URL: PhotoMark])
+    /// Разовое переименование папки: по кадру на группу, первым — показываемый файл
+    case rename([[(from: URL, to: URL)]])
 }
 
 /// Вид подтверждения действия: влияет на цвет и значок
@@ -139,6 +141,12 @@ final class PhotoSession {
 
     // Рисование (клавиша D). Пометки только в памяти, файл не меняется
     var isDrawing = false
+    /// Панель «Коррекция» в просмотре (E)
+    var isAdjusting = false
+    /// «До / после» (\): показать кадр без коррекции
+    var showsOriginal = false
+    private(set) var adjustments: [URL: Adjustment] = [:]
+    private var adjustHistory: [URL: [Adjustment]] = [:]
     var drawTool: DrawTool = .pen
     var drawColor: DrawColor = .red
     var drawSize: DrawSize = .medium
@@ -156,6 +164,8 @@ final class PhotoSession {
     var flashMessage: String? { toast?.text }
     /// «482 файла, из них 468 RAW» для стартового экрана
     var sourceSummary: String?
+    /// Первые кадры исходной папки — миниатюры на стартовом экране
+    var sourcePreview: [URL] = []
     var movedCount = 0
     var trashedCount = 0
 
@@ -165,7 +175,114 @@ final class PhotoSession {
 
     /// Объединять файлы одного кадра (настройка «Объединять RAW и JPEG»)
     var pairsRawAndJPEG: Bool {
-        UserDefaults.standard.object(forKey: "pairRawJpeg") as? Bool ?? true
+        UserDefaults.standard.bool(forKey: Pref.pairRawJpeg)
+    }
+
+    /// Кадры по времени съёмки из EXIF, а не по имени (настройка `sortByCaptureDate`, по умолчанию выкл.)
+    var sortsByCaptureDate: Bool {
+        UserDefaults.standard.bool(forKey: "sortByCaptureDate")
+    }
+
+    /// Порядок папки: по имени или по времени съёмки. В этом же порядке кадры копируются (⌘C) и перетаскиваются
+    private func ordered(_ urls: [URL]) -> [URL] {
+        let byName = urls.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        return sortsByCaptureDate ? MetadataNaming.sortedByCaptureDate(byName) : byName
+    }
+
+    /// Настройку порядка переключили во время просмотра — пересортировать, не теряя текущий кадр
+    func applySortOrder() {
+        guard isViewing, !allPhotos.isEmpty else { return }
+        allPhotos = ordered(allPhotos)
+        refreshDefects()
+        rebuildVisible(keeping: currentPhoto, fallbackIndex: index)
+    }
+
+    // MARK: Переименование всей папки
+
+    /// Разово: все кадры папки получают имена по времени съёмки (шаблон из настроек). Пара RAW + JPEG и XMP —
+    /// под общим именем, занятые имена — с суффиксом, Z возвращает прежние имена всем кадрам сразу
+    func renameAllByCaptureDate() {
+        guard isViewing, !allPhotos.isEmpty else { return }
+        var done: [[(from: URL, to: URL)]] = []
+        var failure: Error?
+        for photo in allPhotos {
+            let base = MetadataNaming.baseName(for: photo, style: renameStyle)
+            guard base != photo.deletingPathExtension().lastPathComponent else { continue }
+            let files = [photo] + companions(of: photo) + sidecars(of: photo)
+            let directory = photo.deletingLastPathComponent()
+            let unique = uniqueBase(in: directory, for: files, preferred: base)
+            var group: [(from: URL, to: URL)] = []
+            do {
+                for file in files {
+                    let target = directory.appendingPathComponent(unique).appendingPathExtension(file.pathExtension)
+                    try moveFile(from: file, to: target)
+                    group.append((from: file, to: target))
+                }
+            } catch {
+                // Кадр не должен остаться разорванным: возвращаем уже переименованные файлы группы
+                for item in group.reversed() {
+                    try? moveFile(from: item.to, to: item.from)
+                }
+                failure = error
+                break
+            }
+            done.append(group)
+        }
+        if !done.isEmpty {
+            applyRenames(done)
+            history.append(.rename(done))
+        }
+        if let failure {
+            errorMessage = "Переименовано \(done.count), дальше ошибка: \(failure.localizedDescription)"
+        }
+        flash(done.isEmpty ? "Все кадры уже названы по времени съёмки"
+                           : "Переименовано: \(done.count) \(Self.plural(done.count, "кадр", "кадра", "кадров"))",
+              kind: .done)
+    }
+
+    private func undoRename(_ groups: [[(from: URL, to: URL)]]) {
+        var restored: [[(from: URL, to: URL)]] = []
+        var failed = 0
+        for group in groups.reversed() {
+            var back: [(from: URL, to: URL)] = []
+            for item in group {
+                do {
+                    try moveFile(from: item.to, to: item.from)
+                    back.append((from: item.to, to: item.from))
+                } catch {
+                    failed += 1
+                }
+            }
+            if !back.isEmpty { restored.append(back) }
+        }
+        applyRenames(restored)
+        if failed > 0 {
+            errorMessage = "Не удалось вернуть имя \(failed) \(Self.plural(failed, "файлу", "файлам", "файлам")) — прежнее имя уже занято"
+        }
+        flash("Отмена", key: "Z", kind: .undo)
+    }
+
+    /// Новые адреса кадров — во все списки, кэши и метки, порядок папки пересобирается
+    private func applyRenames(_ groups: [[(from: URL, to: URL)]]) {
+        var primary: [URL: URL] = [:]
+        for group in groups {
+            guard let first = group.first else { continue }
+            primary[first.from] = first.to
+            let pair = group.dropFirst().map(\.to).filter { !XMPSidecar.isSidecar($0) }
+            companions[first.from] = nil
+            if !pair.isEmpty {
+                companions[first.to] = pair
+            }
+            ImageLoader.evict(first.from)
+            ThumbnailLoader.evict(first.from)
+            moveAnnotations(from: first.from, to: first.to)
+            AnalysisStore.shared.moveRecord(from: first.from, to: first.to)
+            MarkStore.shared.move(from: first.from, to: first.to)
+        }
+        let keep = currentPhoto.map { primary[$0] ?? $0 }
+        allPhotos = ordered(allPhotos.map { primary[$0] ?? $0 })
+        refreshDefects()
+        rebuildVisible(keeping: keep, fallbackIndex: index)
     }
 
     /// Переименовывать кадр по метаданным при переносе в папку назначения (настройка, по умолчанию выкл.)
@@ -179,6 +296,37 @@ final class PhotoSession {
 
     func companions(of url: URL) -> [URL] {
         companions[url] ?? []
+    }
+
+    // MARK: - Правка в другой программе
+
+    /// Кадры, открытые в другой программе, и дата изменения на тот момент
+    @ObservationIgnored private var editedExternally: [URL: Date] = [:]
+    /// Растёт, когда кадр сохранили снаружи: миниатюра, просмотр и сведения перечитываются
+    var editRevision = 0
+
+    func markEditedExternally(_ urls: [URL]) {
+        for url in urls {
+            editedExternally[url] = Self.modificationDate(url) ?? .distantPast
+        }
+    }
+
+    /// При возврате в приложение: перечитать кадры, которые поменялись на диске
+    func reloadEditedExternally() {
+        var changed = false
+        for (url, date) in editedExternally {
+            guard let now = Self.modificationDate(url), now != date else { continue }
+            editedExternally[url] = now
+            ImageLoader.evict(url)
+            ThumbnailLoader.evict(url)
+            PhotoDetailsLoader.evict(url)
+            changed = true
+        }
+        if changed { editRevision += 1 }
+    }
+
+    private nonisolated static func modificationDate(_ url: URL) -> Date? {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
     private var accessURLs: [URL] = []
 
@@ -226,7 +374,7 @@ final class PhotoSession {
 
     /// Анализировать фото при открытии папки (настройка «Умный отбор», по умолчанию вкл.)
     var analysisEnabled: Bool {
-        UserDefaults.standard.object(forKey: "smartAnalysis") as? Bool ?? true
+        UserDefaults.standard.bool(forKey: Pref.smartAnalysis)
     }
 
     /// Показывать переключатель разделов (анализ включён в настройках и готов)
@@ -246,10 +394,74 @@ final class PhotoSession {
 
     /// Кадры раздела с фильтром по звёздам и цвету (серии не фильтруются: их кадры идут блоками)
     private func visiblePhotos(for section: PhotoSection) -> [URL] {
-        let list = sectionPhotos(section)
-        guard section != .series, MarkStore.isEnabled, markFilter.isActive else { return list }
+        var list = sectionPhotos(section)
+        // Серии разбиты на блоки по позициям в списке — их не фильтруем
+        guard section != .series else { return list }
+        if let matches = nameMatcher() {
+            list = list.filter(matches)
+        }
+        guard MarkStore.isEnabled, markFilter.isActive else { return list }
         let marks = MarkStore.shared
         return list.filter { markFilter.matches(marks.mark($0)) }
+    }
+
+    // MARK: Поиск по имени
+
+    /// Строка поиска над сеткой: слова через пробел (все должны встретиться в имени), «4810-4830» — номера кадров
+    var nameQuery = "" {
+        didSet {
+            guard nameQuery != oldValue else { return }
+            rebuildVisible(keeping: currentPhoto, fallbackIndex: 0)
+        }
+    }
+
+    /// Курсор в поле поиска: клавиши отбора из меню (1, Delete, ⌘Z) не срабатывают
+    var isEditingText = false
+
+    var isSearching: Bool {
+        !nameQuery.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func nameMatcher() -> ((URL) -> Bool)? {
+        let query = nameQuery.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return nil }
+        if let range = Self.numberRange(query) {
+            return { url in Self.frameNumber(url).map(range.contains) ?? false }
+        }
+        // Кусок имени где угодно: «6481» → DSCF6481.JPG, «dscf 6481» и «DSCF_6481» — тоже
+        let words = query.split(whereSeparator: \.isWhitespace).map { Self.searchKey(String($0)) }.filter { !$0.isEmpty }
+        guard !words.isEmpty else { return nil }
+        return { [companions] url in
+            // Имена всех файлов кадра: находится и по «NEF», и по «JPG»
+            let names = ([url] + (companions[url] ?? [])).map { Self.searchKey($0.lastPathComponent) }.joined(separator: " ")
+            return words.allSatisfy { names.contains($0) }
+        }
+    }
+
+    /// Без регистра, диакритики и разделителей: «DSCF_6481.JPG» → «dscf6481jpg»
+    private nonisolated static func searchKey(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+            .filter { $0.isLetter || $0.isNumber }
+    }
+
+    /// «4810-4830», «4810–4830» → 4810…4830
+    private static func numberRange(_ query: String) -> ClosedRange<Int>? {
+        let parts = query.split(whereSeparator: { "-–—".contains($0) }).map { $0.trimmingCharacters(in: .whitespaces) }
+        // От трёх цифр с каждой стороны: «2026-06» — это начало даты в имени, а не диапазон
+        guard parts.count == 2, parts.allSatisfy({ $0.count >= 3 }),
+              let a = Int(parts[0]), let b = Int(parts[1]) else { return nil }
+        return min(a, b)...max(a, b)
+    }
+
+    /// Номер кадра — последняя группа цифр в имени: DSCF4812 → 4812, 2026-06-14_174212_DSC_0452 → 452
+    private static func frameNumber(_ url: URL) -> Int? {
+        let name = url.deletingPathExtension().lastPathComponent
+        guard let last = name.lastIndex(where: \.isNumber) else { return nil }
+        var start = last
+        while start > name.startIndex, name[name.index(before: start)].isNumber {
+            start = name.index(before: start)
+        }
+        return Int(name[start...last])
     }
 
     /// Кадры раздела из полного списка
@@ -282,7 +494,7 @@ final class PhotoSession {
 
     /// Звёзды или цвет для `urls` (по умолчанию — текущий кадр)
     func applyMark(_ command: MarkCommand, to urls: [URL]? = nil) {
-        guard MarkStore.isEnabled else { return }
+        guard command.isAllowed else { return }
         let targets = urls ?? currentPhoto.map { [$0] } ?? []
         guard !targets.isEmpty else { return }
         let store = MarkStore.shared
@@ -290,6 +502,7 @@ final class PhotoSession {
         switch command {
         case .rating(let n): store.setRating(targets, n)
         case .color(let n): store.setColor(targets, n)
+        case .flag(let n): store.setFlag(targets, n)
         }
         // В историю — только если что-то поменялось: повторное ⌥3 не должно съедать Z
         if before.contains(where: { store.mark($0.key) != $0.value }) {
@@ -504,7 +717,6 @@ final class PhotoSession {
 
     /// Пересобирает список раздела. Текущим становится `url`, если он виден, иначе кадр на месте `fallbackIndex`
     private func rebuildVisible(keeping url: URL?, fallbackIndex: Int) {
-        refreshDefects()
         photos = visiblePhotos(for: section)
         if let url, let i = photos.firstIndex(of: url) {
             index = i
@@ -514,6 +726,7 @@ final class PhotoSession {
         // Раздел опустел, а в папке кадры ещё есть — возвращаемся к сетке (а не к экрану «Готово»)
         if photos.isEmpty && !allPhotos.isEmpty && viewMode != .grid {
             isDrawing = false
+            isAdjusting = false
             viewMode = .grid
         }
     }
@@ -541,8 +754,11 @@ final class PhotoSession {
         section = .all
         openedSeries = nil
         openedPerson = nil
+        refreshDefects()
         rebuildVisible(keeping: nil, fallbackIndex: 0)
         history.removeAll()
+        adjustments = [:]
+        adjustHistory = [:]
         movedCount = 0
         trashedCount = 0
         guard !allPhotos.isEmpty else {
@@ -561,17 +777,24 @@ final class PhotoSession {
     }
 
     func stopReview() {
+        editedExternally = [:]
+        nameQuery = ""
+        isEditingText = false
         AnalysisStore.shared.close()
         ImageLoader.removeAll()
         ThumbnailLoader.removeAll()
         isDrawing = false
+        isAdjusting = false
         isViewing = false
         WindowChrome.exitFullScreen()
     }
 
     func toggleViewMode() {
         viewMode = viewMode == .grid ? .single : .grid
-        if viewMode == .grid { isDrawing = false }
+        if viewMode == .grid {
+            isDrawing = false
+            isAdjusting = false
+        }
         prefetchAroundCurrent()
     }
 
@@ -633,6 +856,7 @@ final class PhotoSession {
     }
 
     func moveCurrentToPrimary() {
+        guard Feature.transfer.isOn else { return }
         guard let destination = primaryDestination else {
             errorMessage = "Добавьте папку назначения."
             return
@@ -673,6 +897,11 @@ final class PhotoSession {
             undoDrawing()
             return
         }
+        // В коррекции — последнее движение ползунка
+        if isAdjusting && viewMode == .single {
+            undoAdjustment()
+            return
+        }
         guard let step = history.popLast() else { return }
         let entry: HistoryEntry
         switch step {
@@ -680,6 +909,9 @@ final class PhotoSession {
             entry = move
         case .marks(let previous):
             undoMarks(previous)
+            return
+        case .rename(let groups):
+            undoRename(groups)
             return
         }
         do {
@@ -705,6 +937,7 @@ final class PhotoSession {
             let insertAt = min(entry.allIndexBefore, allPhotos.count)
             allPhotos.insert(restore, at: insertAt)
             // Кадр возвращается в общий список; в разделе он виден, только если по-прежнему ему подходит
+            refreshDefects()
             rebuildVisible(keeping: restore, fallbackIndex: index)
             if viewMode == .compare, photos.contains(restore) {
                 // Возвращённый кадр показываем в активной половине
@@ -723,8 +956,37 @@ final class PhotoSession {
             undo()
             return
         }
-        if let destination = destinations.first(where: { $0.shortcut == key }) {
+        if Feature.transfer.isOn, let destination = destinations.first(where: { $0.shortcut == key }) {
             moveCurrent(to: destination)
+        }
+    }
+
+    // MARK: - Счётчики для подсказок и колонки папок
+
+    /// Сколько кадров за этот просмотр ушло в папку (отменённые не считаются)
+    func movedCount(to destination: Destination) -> Int {
+        let folder = destination.url.standardizedFileURL.path
+        return history.reduce(0) { count, step in
+            guard case .move(let entry) = step else { return count }
+            return entry.currentURL.deletingLastPathComponent().standardizedFileURL.path == folder ? count + 1 : count
+        }
+    }
+
+    /// Сколько кадров за этот просмотр ушло в корзину
+    var trashedInSession: Int {
+        let folders = Set(destinations.map { $0.url.standardizedFileURL.path })
+        return history.reduce(0) { count, step in
+            guard case .move(let entry) = step else { return count }
+            let folder = entry.currentURL.deletingLastPathComponent().standardizedFileURL.path
+            return folders.contains(folder) ? count : count + 1
+        }
+    }
+
+    /// Разобрано (перенесено и удалено) за этот просмотр
+    var sortedInSession: Int {
+        history.reduce(0) { count, step in
+            if case .move = step { return count + 1 }
+            return count
         }
     }
 
@@ -740,6 +1002,7 @@ final class PhotoSession {
             return
         }
         isDrawing = false
+        isAdjusting = false
         compareLeft = current
         compareRight = photos[index + 1 < photos.count ? index + 1 : index - 1]
         compareActive = .right
@@ -871,6 +1134,98 @@ final class PhotoSession {
     func toggleDrawing() {
         guard isViewing, viewMode == .single else { return }
         isDrawing.toggle()
+        if isDrawing { isAdjusting = false }
+    }
+
+    // MARK: - Коррекция
+
+    func toggleAdjusting() {
+        guard isViewing, viewMode == .single, Feature.adjust.isOn else { return }
+        isAdjusting.toggle()
+        showsOriginal = false
+        if isAdjusting { isDrawing = false }
+    }
+
+    func adjustment(for url: URL) -> Adjustment {
+        adjustments[url] ?? .identity
+    }
+
+    func hasAdjustment(_ url: URL) -> Bool {
+        adjustments[url] != nil
+    }
+
+    /// Значение ползунка; шаг отмены записывает `beginAdjustStep` в начале перетаскивания
+    func setAdjustment(_ adjustment: Adjustment, for url: URL) {
+        adjustments[url] = adjustment.isIdentity ? nil : adjustment
+        showsOriginal = false
+    }
+
+    func beginAdjustStep(for url: URL) {
+        adjustHistory[url, default: []].append(adjustment(for: url))
+    }
+
+    func resetAdjustment() {
+        guard let url = currentPhoto, hasAdjustment(url) else { return }
+        beginAdjustStep(for: url)
+        setAdjustment(.identity, for: url)
+        flash("Коррекция сброшена", kind: .undo)
+    }
+
+    private func undoAdjustment() {
+        guard let url = currentPhoto, let previous = adjustHistory[url]?.popLast() else {
+            flash("Отменять нечего")
+            return
+        }
+        setAdjustment(previous, for: url)
+        flash("Отменено", key: "Z", kind: .undo)
+    }
+
+    /// Копия JPEG с коррекцией в полном разрешении; оригинал не трогается
+    func saveAdjusted() {
+        guard let url = currentPhoto, hasAdjustment(url) else {
+            flash("Коррекции нет — двигайте ползунки (E)")
+            return
+        }
+        let adjustment = self.adjustment(for: url)
+        let raw = ImageLoader.rawExtensions.contains(url.pathExtension.lowercased())
+        let panel = NSSavePanel()
+        panel.title = "Сохранить копию с коррекцией"
+        panel.allowedContentTypes = [.jpeg]
+        panel.canCreateDirectories = true
+        panel.directoryURL = url.deletingLastPathComponent()
+        panel.nameFieldStringValue = url.deletingPathExtension().lastPathComponent + "_правка.jpg"
+        guard panel.runModal() == .OK, var target = panel.url else { return }
+        let sources = Set(([url] + companions(of: url)).map(\.standardizedFileURL))
+        guard !sources.contains(target.standardizedFileURL) else {
+            flash("Нельзя перезаписать оригинал", kind: .error)
+            return
+        }
+        // Файлы не перезаписываются: занятое имя получает _2, _3…
+        if FileManager.default.fileExists(atPath: target.path) {
+            target = uniqueURL(in: target.deletingLastPathComponent(), preferredName: target.lastPathComponent)
+        }
+        let destination = target
+        flash("Сохраняю…")
+        Task {
+            let ok = await Task.detached(priority: .userInitiated) {
+                AdjustRenderer.export(url, adjustment, to: destination, raw: raw)
+            }.value
+            if ok {
+                flash("Сохранено · \(destination.lastPathComponent)", key: "⌘S", kind: .done)
+            } else {
+                flash("Не удалось сохранить", kind: .error)
+            }
+        }
+    }
+
+    /// ⌘S: в коррекции или когда есть только коррекция — копия с ней, иначе — с пометками
+    func saveCopy() {
+        guard let url = currentPhoto else { return }
+        if isAdjusting || (strokes(for: url).isEmpty && hasAdjustment(url)) {
+            saveAdjusted()
+        } else {
+            saveAnnotated()
+        }
     }
 
     /// Копия снимка с пометками в буфер обмена (до 4000 px, чтобы вставлялось быстро)
@@ -933,6 +1288,12 @@ final class PhotoSession {
         if let strokes = annotations.removeValue(forKey: old) {
             annotations[new] = strokes
         }
+        if let adjustment = adjustments.removeValue(forKey: old) {
+            adjustments[new] = adjustment
+        }
+        if let history = adjustHistory.removeValue(forKey: old) {
+            adjustHistory[new] = history
+        }
         if let history = annotationHistory.removeValue(forKey: old) {
             annotationHistory[new] = history
         }
@@ -962,6 +1323,7 @@ final class PhotoSession {
         if allPhotos.indices.contains(allIndex) {
             allPhotos.remove(at: allIndex)
         }
+        refreshDefects()
         rebuildVisible(keeping: nil, fallbackIndex: removedIndex)
         if photos.isEmpty {
             flash(result.text, key: result.key, kind: result.kind)
@@ -1001,7 +1363,7 @@ final class PhotoSession {
 
         let grouped = groupPairs(files)
         companions = grouped.companions
-        return grouped.primaries.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        return ordered(grouped.primaries)
     }
 
     // MARK: - Пары RAW + JPEG
@@ -1012,7 +1374,7 @@ final class PhotoSession {
     private func displayRank(_ url: URL) -> Int {
         let ext = url.pathExtension.lowercased()
         if let i = Self.displayPriority.firstIndex(of: ext) { return i }
-        return Self.rawExtensions.contains(ext) ? 100 : 200
+        return ImageLoader.rawExtensions.contains(ext) ? 100 : 200
     }
 
     /// Файлы с одинаковым именем в одной папке — один кадр
@@ -1077,13 +1439,13 @@ final class PhotoSession {
 
     /// Папка «Отобранные» по умолчанию (настройка `autoKeepFolder`, по умолчанию вкл.)
     static var autoKeepFolder: Bool {
-        UserDefaults.standard.object(forKey: "autoKeepFolder") as? Bool ?? true
+        UserDefaults.standard.bool(forKey: Pref.autoKeepFolder)
     }
 
     /// Назначает «Отобранные» внутри исходной папки клавишей 1. На диске папка НЕ создаётся:
     /// это делает `moveCurrent` при первом переносе, так что без переносов пустой папки не будет
     private func ensureKeepFolder() {
-        guard Self.autoKeepFolder, let sourceURL else { return }
+        guard Feature.transfer.isOn, Self.autoKeepFolder, let sourceURL else { return }
         let keep = sourceURL.appendingPathComponent("Отобранные", isDirectory: true)
         rememberAccess(keep)
         destinations = [Destination(name: "Отобранные", url: keep, shortcut: "1")]
@@ -1116,6 +1478,8 @@ final class PhotoSession {
 
     private func prefetchAroundCurrent() {
         let urls = (-1...2).compactMap { offset -> URL? in
+            // Просмотрщик и сравнение сами запрашивают текущий кадр.
+            if offset == 0 && viewMode != .grid { return nil }
             let i = index + offset
             guard photos.indices.contains(i) else { return nil }
             return photos[i]
@@ -1139,31 +1503,40 @@ final class PhotoSession {
     func refreshSourceSummary() {
         guard let source = sourceURL else {
             sourceSummary = nil
+            sourcePreview = []
             return
         }
         let recursive = includeSubfolders
         let excluded = Set(destinations.map { $0.url.standardizedFileURL.path })
         let pairing = pairsRawAndJPEG
         Task {
-            let summary = await Task.detached(priority: .utility) {
+            let result = await Task.detached(priority: .utility) {
                 PhotoSession.summarize(source, recursive: recursive, excluded: excluded, pairing: pairing)
             }.value
             if sourceURL == source {
-                sourceSummary = summary
+                sourceSummary = result.text
+                sourcePreview = result.preview
             }
         }
     }
 
-    private nonisolated static let rawExtensions: Set<String> = ["dng", "raf", "cr2", "cr3", "nef", "arw", "orf", "rw2"]
 
-    private nonisolated static func summarize(_ source: URL, recursive: Bool, excluded: Set<String>, pairing: Bool) -> String {
+    private nonisolated static func summarize(_ source: URL, recursive: Bool, excluded: Set<String>, pairing: Bool) -> (text: String, preview: [URL]) {
         var total = 0
         var raw = 0
         var shots = Set<String>()
+        var preview: [URL] = []
+        var rawPreview: [URL] = []
         func count(_ url: URL) {
             guard ImageLoader.isPhoto(url) else { return }
             total += 1
-            if rawExtensions.contains(url.pathExtension.lowercased()) { raw += 1 }
+            // Для миниатюр — сначала не RAW (их превью быстрее), RAW — если больше ничего нет
+            if ImageLoader.rawExtensions.contains(url.pathExtension.lowercased()) {
+                if rawPreview.count < 24 { rawPreview.append(url) }
+            } else if preview.count < 24 {
+                preview.append(url)
+            }
+            if ImageLoader.rawExtensions.contains(url.pathExtension.lowercased()) { raw += 1 }
             shots.insert(url.deletingPathExtension().path.lowercased())
         }
         if recursive, let enumerator = FileManager.default.enumerator(
@@ -1184,13 +1557,14 @@ final class PhotoSession {
             )) ?? []
             listed.forEach(count)
         }
-        guard total > 0 else { return "фото не найдено" }
+        guard total > 0 else { return ("фото не найдено", []) }
+        let firstShots = Array((preview.isEmpty ? rawPreview : preview).sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }.prefix(6))
         let files = "\(total) \(plural(total, "файл", "файла", "файлов"))"
         var summary = raw > 0 ? "\(files), из них \(raw) RAW" : files
         if pairing && shots.count < total {
             summary += " · \(shots.count) \(plural(shots.count, "кадр", "кадра", "кадров"))"
         }
-        return summary
+        return (summary, firstShots)
     }
 
     nonisolated static func plural(_ n: Int, _ one: String, _ few: String, _ many: String) -> String {

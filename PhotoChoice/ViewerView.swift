@@ -5,7 +5,18 @@ struct ViewerView: View {
     @Bindable var session: PhotoSession
 
     @Environment(\.theme) private var theme
-    @AppStorage("marksEnabled") private var marksEnabled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(Feature.stars.key) private var starsOn = false
+    @AppStorage(Feature.colors.key) private var colorsOn = false
+    @AppStorage(Feature.flags.key) private var flagsOn = false
+    @AppStorage(Feature.transfer.key) private var transferOn = true
+    @AppStorage(Feature.compare.key) private var compareOn = true
+    @AppStorage(Feature.drawing.key) private var drawingOn = true
+    @AppStorage(Feature.adjust.key) private var adjustOn = true
+    @AppStorage(Feature.info.key) private var infoOn = true
+    /// Панели гаснут через 2 с покоя (настройка, по умолчанию выкл.)
+    @AppStorage(Pref.autoHideHUD) private var autoHideHUD = false
+    @AppStorage(Pref.surroundTone) private var surroundTone = 2
     /// Подсветка пересветов и провалов — треугольники на гистограмме в сведениях
     @AppStorage("clipHighlights") private var clipHighlights = false
     @AppStorage("clipShadows") private var clipShadows = false
@@ -13,7 +24,10 @@ struct ViewerView: View {
     @State private var currentImage: NSImage?
     /// Тот же кадр в полном разрешении — подгружается, когда при зуме пикселей превью уже не хватает
     @State private var fullImage: NSImage?
+    /// Кадр с коррекцией: сначала по превью, через 0,3 с покоя — в полном разрешении, если оно загружено
+    @State private var adjustedImage: NSImage?
     @State private var loadingFullFor: URL?
+    @State private var fullLoadTask: Task<Void, Never>?
     /// Кадр из «Брака», который уже открыли сразу на проблемном месте (второй раз не прыгаем)
     @State private var autoZoomedFor: URL?
 
@@ -31,7 +45,7 @@ struct ViewerView: View {
     // «Улетающее» фото после решения
     @State private var ghost: Ghost?
 
-    // Автоскрытие интерфейса поверх фото («Стекло», «Тишина»)
+    // Интерфейс поверх фото: H прячет вручную, с автоскрытием — ещё и 2 с покоя
     @State private var hudVisible = true
     @State private var hideTask: Task<Void, Never>?
 
@@ -42,15 +56,43 @@ struct ViewerView: View {
     /// Масштаб отличается от «вписанного» в любую сторону
     private var isScaled: Bool { abs(zoom - 1) > 0.01 }
 
-    /// Поля вокруг фото по теме
+    private var marksOn: Bool { starsOn || colorsOn || flagsOn }
+
+    /// Поля вокруг фото по теме; у «Нейтрали» панели плотные — фото между ними
     private var insets: EdgeInsets {
         let s = theme.stageInsets
+        if theme.isNeutral {
+            return EdgeInsets(top: theme.topbarHeight + s.v, leading: s.h, bottom: theme.hintbarHeight + s.v, trailing: s.h)
+        }
         return EdgeInsets(top: s.v, leading: s.h, bottom: s.v, trailing: s.h)
     }
 
     /// Ширина, которую забирает панель сведений справа; фото сдвигается, а не лежит под ней
     private var panelReserve: CGFloat {
-        session.showInfo && !session.photos.isEmpty ? theme.panelReserve : 0
+        (infoOn && session.showInfo || session.isAdjusting) && !session.photos.isEmpty ? theme.panelReserve : 0
+    }
+
+    private var adjustment: Adjustment {
+        session.currentPhoto.map { session.adjustment(for: $0) } ?? .identity
+    }
+
+    /// Что показывать: с коррекцией, пока она не готова или «до» — исходный кадр
+    private var shownImage: NSImage? {
+        guard let base = fullImage ?? currentImage else { return nil }
+        if adjustment.isIdentity || session.showsOriginal { return base }
+        return adjustedImage ?? base
+    }
+
+    private struct RenderKey: Hashable {
+        let url: URL?
+        let adjustment: Adjustment
+        let hasPreview: Bool
+        let hasFull: Bool
+    }
+
+    /// Поле под фото: у «Нейтрали» его выбирают в сведениях
+    private var stageColor: Color {
+        theme.isNeutral ? SurroundTone.color(surroundTone) : theme.c.canvas
     }
 
     private struct Ghost: Identifiable {
@@ -63,7 +105,7 @@ struct ViewerView: View {
     var body: some View {
         let c = theme.c
         ZStack(alignment: .trailing) {
-            c.canvas.ignoresSafeArea()
+            stageColor.ignoresSafeArea()
 
             if session.photos.isEmpty {
                 finishedState
@@ -78,10 +120,14 @@ struct ViewerView: View {
                 }
                 .padding(.trailing, panelReserve)
 
-                if session.showInfo, let url = session.currentPhoto {
-                    InfoPanel(url: url, companions: session.companions(of: url))
+                if session.isAdjusting, let url = session.currentPhoto {
+                    AdjustPanel(session: session, url: url)
                         .padding(theme.isGlass ? 12 : 0)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                        .transition(.move(edge: .trailing))
+                } else if infoOn, session.showInfo, let url = session.currentPhoto {
+                    InfoPanel(url: url, companions: session.companions(of: url), showsSurround: true, revision: session.editRevision)
+                        .padding(theme.isGlass ? 12 : 0)
+                        .transition(.move(edge: .trailing))
                 }
             }
         }
@@ -99,7 +145,11 @@ struct ViewerView: View {
         }
         .onAppear { pokeHUD() }
         .onChange(of: session.currentPhoto, initial: true) { _, url in
+            fullLoadTask?.cancel()
+            fullLoadTask = nil
+            loadingFullFor = nil
             resetTransform()
+            adjustedImage = nil
             fullImage = url.flatMap { ImageLoader.cachedFullImage(at: $0) }
             if let url, let cached = ImageLoader.cachedImage(at: url) {
                 currentImage = cached
@@ -110,30 +160,42 @@ struct ViewerView: View {
             upgradeResolutionIfNeeded()
         }
         .onChange(of: session.isDrawing) { _, _ in pokeHUD() }
+        .onChange(of: autoHideHUD) { _, on in
+            hideTask?.cancel()
+            if on { pokeHUD() } else { hudVisible = true }
+        }
+        .task(id: RenderKey(url: session.currentPhoto, adjustment: adjustment,
+                            hasPreview: currentImage != nil, hasFull: fullImage != nil)) {
+            await renderAdjusted()
+        }
         .onDisappear {
+            fullLoadTask?.cancel()
+            fullLoadTask = nil
+            loadingFullFor = nil
             session.isDrawing = false
+            session.isAdjusting = false
             hideTask?.cancel()
         }
-        .task(id: session.currentPhoto) {
+        .task(id: "\(session.currentPhoto?.path ?? "")#\(session.editRevision)") {
             await loadCurrentImage()
         }
     }
 
     private var showsHUD: Bool {
-        hudVisible || !theme.autoHidesHUD || session.isDrawing
+        hudVisible || session.isDrawing
     }
 
-    /// Возвращает интерфейс и заново заводит таймер скрытия (2 с простоя)
+    /// С автоскрытием: возвращает интерфейс (за 120 мс) и заново заводит таймер (2 с покоя, гаснет за 200 мс)
     private func pokeHUD() {
+        guard autoHideHUD else { return }
         if !hudVisible {
-            withAnimation(.easeOut(duration: 0.15)) { hudVisible = true }
+            withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.12)) { hudVisible = true }
         }
         hideTask?.cancel()
-        guard theme.autoHidesHUD else { return }
         hideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled, !session.isDrawing else { return }
-            withAnimation(.easeOut(duration: 0.3)) { hudVisible = false }
+            withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.2)) { hudVisible = false }
         }
     }
 
@@ -148,12 +210,12 @@ struct ViewerView: View {
         GeometryReader { geo in
             ZStack {
                 if let currentImage {
-                    Image(nsImage: fullImage ?? currentImage)
+                    Image(nsImage: shownImage ?? currentImage)
                         .resizable()
                         .scaledToFit()
                         .overlay {
                             if clipHighlights || clipShadows, let url = session.currentPhoto {
-                                ClippingLayer(url: url, image: fullImage ?? currentImage,
+                                ClippingLayer(url: url, image: shownImage ?? currentImage,
                                               highlights: clipHighlights, shadows: clipShadows)
                             }
                         }
@@ -198,6 +260,15 @@ struct ViewerView: View {
                 }
             }
             .contentShape(Rectangle())
+            .contextMenu {
+                if !session.isDrawing, let url = session.currentPhoto {
+                    FileActionsMenu(session: session, photos: [url])
+                    Divider()
+                    Button("Показать в Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([url] + session.companions(of: url))
+                    }
+                }
+            }
             .onAppear {
                 containerSize = geo.size
                 applyAutoZoom()
@@ -234,25 +305,32 @@ struct ViewerView: View {
                 DrawToolbar(session: session)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
-                HintBar(groups: [
-                    HintGroup(title: "Листать", hints: [
-                        Hint("←", "→", label: "кадр")
-                    ]),
-                    HintGroup(title: "Отбор", hints: [
-                        Hint("1–9", label: "в папку"),
-                        Hint("⌫", label: "корзина"),
-                        Hint("Z", label: "отмена")
-                    ])
-                ] + (marksEnabled ? [MarkHints.group] : []) + [
-                    HintGroup(title: "Вид", hints: [
-                        Hint("I", label: "инфо"),
-                        Hint("D", label: "рисовать"),
-                        Hint("C", label: "сравнить"),
-                        Hint("F", label: "сетка")
-                    ])
-                ])
+                HintBar(groups: hintGroups)
             }
         }
+    }
+
+    private var hintGroups: [HintGroup] {
+        if session.isAdjusting {
+            return [HintGroup(title: "Коррекция", hints: [
+                Hint("←", "→", label: "листать"),
+                Hint("\\", label: "до / после"),
+                Hint("Z", label: "отменить"),
+                Hint("⌘S", label: "сохранить копию"),
+                Hint("E", label: "готово")
+            ])]
+        }
+        var view = [Hint("←", "→", label: "листать"), Hint("F", label: "сетка")]
+        if infoOn { view.append(Hint("I", label: "сведения")) }
+        if drawingOn { view.append(Hint("D", label: "рисовать")) }
+        if adjustOn { view.append(Hint("E", label: "коррекция")) }
+        if compareOn { view.append(Hint("C", label: "сравнить")) }
+        view.append(Hint("Z", label: "отменить"))
+        var groups = [HintGroup.targets(session), HintGroup(title: "Вид", hints: view)]
+        if let marks = MarkHints.group {
+            groups.append(marks)
+        }
+        return groups
     }
 
     private var topbar: some View {
@@ -267,29 +345,30 @@ struct ViewerView: View {
                         Text("Сетка")
                     }
                 }
-                .buttonStyle(PCButtonStyle(kind: .ghost))
+                .buttonStyle(PCButtonStyle(kind: theme.isGlass ? .ghost : .secondary))
                 .help("К сетке (F или Esc)")
             }
 
             capsuleGroup(text: true) {
                 HStack(spacing: 12) {
-                    counter
                     Text(session.currentPhoto?.lastPathComponent ?? "")
-                        .font(.system(size: theme.isQuiet ? 12 : 13, weight: theme.isQuiet ? .regular : .medium))
-                        .foregroundStyle(theme.isQuiet ? c.text2 : c.text1)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(c.text1)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    counter
                     if let url = session.currentPhoto, !session.companions(of: url).isEmpty {
                         Text("+ " + session.companions(of: url).map { $0.pathExtension.uppercased() }.joined(separator: " + "))
                             .font(theme.numFont)
                             .foregroundStyle(c.text3)
                     }
-                    if marksEnabled, let url = session.currentPhoto {
+                    if marksOn, let url = session.currentPhoto {
                         MarkEditor(
                             mark: MarkStore.shared.mark(url),
                             size: 12,
                             onRating: { session.applyMark(.rating($0)) },
-                            onColor: { session.applyMark(.color($0)) }
+                            onColor: { session.applyMark(.color($0)) },
+                            onFlag: { session.applyMark(.flag($0)) }
                         )
                     }
                 }
@@ -301,46 +380,56 @@ struct ViewerView: View {
                 zoomBadge
             }
 
-            capsuleGroup {
-                HStack(spacing: 4) {
-                    Button {
-                        session.startCompare()
-                    } label: {
-                        Image(systemName: "arrow.left.arrow.right")
-                    }
-                    .buttonStyle(PCIconButtonStyle())
-                    .help("Сравнить с соседним кадром (C)")
+            if compareOn || drawingOn || adjustOn || infoOn {
+                capsuleGroup {
+                    HStack(spacing: 4) {
+                        if compareOn {
+                            Button {
+                                session.startCompare()
+                            } label: {
+                                Image(systemName: "arrow.left.arrow.right")
+                            }
+                            .buttonStyle(PCIconButtonStyle())
+                            .help("Сравнить с соседним кадром (C)")
+                        }
 
-                    Button {
-                        withAnimation(.easeOut(duration: 0.2)) { session.toggleDrawing() }
-                    } label: {
-                        Image(systemName: "pencil.tip.crop.circle")
-                    }
-                    .buttonStyle(PCIconButtonStyle(isOn: session.isDrawing))
-                    .help("Рисовать (D)")
+                        if drawingOn {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.2)) { session.toggleDrawing() }
+                            } label: {
+                                Image(systemName: "pencil.tip.crop.circle")
+                            }
+                            .buttonStyle(PCIconButtonStyle(isOn: session.isDrawing))
+                            .help("Рисовать (D)")
+                        }
 
-                    Button {
-                        withAnimation(.easeOut(duration: 0.2)) { session.showInfo.toggle() }
-                    } label: {
-                        Image(systemName: "sidebar.right")
+                        if adjustOn {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.22)) { session.toggleAdjusting() }
+                            } label: {
+                                Image(systemName: "slider.horizontal.3")
+                            }
+                            .buttonStyle(PCIconButtonStyle(isOn: session.isAdjusting || adjustment != .identity))
+                            .help("Коррекция: экспозиция, тени, цвет (E)")
+                        }
+
+                        if infoOn {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.22)) { session.showInfo.toggle() }
+                            } label: {
+                                Image(systemName: "sidebar.right")
+                            }
+                            .buttonStyle(PCIconButtonStyle(isOn: session.showInfo))
+                            .help("Сведения о снимке (I)")
+                        }
                     }
-                    .buttonStyle(PCIconButtonStyle(isOn: session.showInfo))
-                    .help("Сведения о снимке (I)")
                 }
             }
         }
-        .padding(.horizontal, theme.isGlass ? 16 : 12)
-        .padding(.top, theme.isGlass ? 12 : 0)
-        .frame(height: theme.topbarHeight + (theme.isGlass ? 8 : 0))
-        .background {
-            if theme.isStudio || theme.isContact {
-                c.overlay
-                    .background(.ultraThinMaterial)
-                    .overlay(alignment: .bottom) {
-                        Rectangle().fill(c.line).frame(height: 1)
-                    }
-            }
-        }
+        .padding(.horizontal, theme.isGlass ? 14 : (theme.isNeutral ? 14 : 20))
+        .padding(.top, theme.isGlass ? 14 : 0)
+        .frame(height: theme.topbarHeight + (theme.isGlass ? 14 : 0))
+        .background(theme.isNeutral ? Color(hex: 0x222222) : Color.clear)
         .overlay {
             if session.isDrawing {
                 // Ярлык режима по центру панели
@@ -387,7 +476,7 @@ struct ViewerView: View {
         .help("Двойной клик — вписать кадр в экран")
     }
 
-    /// «12 / 480»
+    /// «12 / 480»; у «Плёнки» — янтарными цифрами, как на краю плёнки
     private var counter: some View {
         let c = theme.c
         let total = session.photos.count
@@ -395,33 +484,27 @@ struct ViewerView: View {
         return HStack(spacing: 0) {
             if session.section != .all {
                 Text("\(session.section.title) · ")
-                    .foregroundStyle(c.accent)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(c.text2)
             }
             Text("\(current)")
                 .fontWeight(.semibold)
-                .foregroundStyle(theme.isContact ? c.edge : c.text1)
+                .foregroundStyle(theme.isFilm ? c.edge : c.text1)
             Text(" / \(total)")
-                .foregroundStyle(theme.isContact ? c.edge : c.text2)
+                .foregroundStyle(theme.isFilm ? c.text3 : c.text2)
         }
         .font(theme.numFont)
-        .tracking(theme.isContact ? 0.9 : 0)
+        .tracking(theme.isFilm ? 0.9 : 0)
     }
 
     /// Процент масштаба
     private var zoomBadge: some View {
         let c = theme.c
-        return Text("\(Int((zoom * 100).rounded()))%")
-            .font(theme.numFont)
-            .foregroundStyle(theme.isContact ? c.edge : (theme.isQuiet ? c.text2 : c.text1))
-            .padding(.horizontal, theme.isQuiet ? 0 : 8)
+        return Text("\(Int((zoom * 100).rounded())) %")
+            .font(.system(size: 13).monospacedDigit())
+            .foregroundStyle(c.text2)
+            .padding(.horizontal, 8)
             .padding(.vertical, 2)
-            .background {
-                if theme.isStudio {
-                    RoundedRectangle(cornerRadius: theme.rSm).fill(c.surface2)
-                } else if theme.isContact {
-                    RoundedRectangle(cornerRadius: theme.rSm).stroke(c.lineStrong, lineWidth: 1)
-                }
-            }
     }
 
     /// У «Стекла» группы — стеклянные капсулы; у остальных — просто содержимое
@@ -481,16 +564,17 @@ struct ViewerView: View {
                 let width = value.predictedEndTranslation.width
                 let height = value.predictedEndTranslation.height
 
-                if width > 140 {
+                if width > 140, transferOn {
                     commit(flyTo: CGSize(width: 900, height: height)) { session.moveCurrentToPrimary() }
                 } else if width < -140 {
                     commit(flyTo: CGSize(width: -900, height: height)) { session.trashCurrent() }
-                } else if height < -160, session.destinations.count > 1 {
+                } else if height < -160, transferOn, session.destinations.count > 1 {
                     commit(flyTo: CGSize(width: 0, height: -800)) {
                         session.moveCurrent(to: session.destinations[1])
                     }
                 } else {
-                    withAnimation(.spring(duration: 0.28)) { dragOffset = .zero }
+                    // Не дотянули — карточка возвращается с лёгким пружинением
+                    withAnimation(.spring(duration: 0.3, bounce: 0.15)) { dragOffset = .zero }
                 }
             }
     }
@@ -510,7 +594,7 @@ struct ViewerView: View {
                 if ghost?.id == newGhost.id { ghost = nil }
             }
         } else if session.currentPhoto == before {
-            withAnimation(.spring(duration: 0.28)) { dragOffset = .zero }
+            withAnimation(.spring(duration: 0.3, bounce: 0.15)) { dragOffset = .zero }
         }
     }
 
@@ -618,7 +702,7 @@ struct ViewerView: View {
         let h = insets.leading
         let v = insets.top
         let availW = max(containerSize.width - h * 2, 1)
-        let availH = max(containerSize.height - v * 2, 1)
+        let availH = max(containerSize.height - insets.top - insets.bottom, 1)
         let fit = min(availW / image.size.width, availH / image.size.height)
         let shownW = image.size.width * fit * zoom
         let shownH = image.size.height * fit * zoom
@@ -640,6 +724,25 @@ struct ViewerView: View {
             zoom = 1
             pan = .zero
             panAtDragStart = nil
+        }
+    }
+
+    // MARK: - Коррекция
+
+    private func renderAdjusted() async {
+        let adjustment = self.adjustment
+        guard let url = session.currentPhoto, !adjustment.isIdentity, let preview = currentImage else {
+            adjustedImage = nil
+            return
+        }
+        if let image = await AdjustRenderer.render(preview, adjustment), !Task.isCancelled, url == session.currentPhoto {
+            adjustedImage = image
+        }
+        guard let full = fullImage else { return }
+        try? await Task.sleep(for: .milliseconds(300))
+        guard !Task.isCancelled else { return }
+        if let image = await AdjustRenderer.render(full, adjustment), !Task.isCancelled, url == session.currentPhoto {
+            adjustedImage = image
         }
     }
 
@@ -669,7 +772,7 @@ struct ViewerView: View {
         guard let image = currentImage, image.size.width > 0, image.size.height > 0,
               containerSize.width > 0, containerSize.height > 0 else { return nil }
         let availW = max(containerSize.width - insets.leading * 2, 1)
-        let availH = max(containerSize.height - insets.top * 2, 1)
+        let availH = max(containerSize.height - insets.top - insets.bottom, 1)
         let fit = min(availW / image.size.width, availH / image.size.height)
         return CGSize(width: image.size.width * fit, height: image.size.height * fit)
     }
@@ -685,8 +788,9 @@ struct ViewerView: View {
               let preview = currentImage, let fitted = fittedSize,
               fitted.width * zoom * backingScale > preview.size.width * 1.1 else { return }
         loadingFullFor = url
-        Task {
+        fullLoadTask = Task {
             let image = await ImageLoader.fullImageAsync(at: url)
+            guard !Task.isCancelled else { return }
             if loadingFullFor == url { loadingFullFor = nil }
             guard url == session.currentPhoto, let image, image.size.width > preview.size.width else { return }
             fullImage = image
@@ -735,9 +839,23 @@ struct ViewerView: View {
             pokeHUD()
         }
 
-        if !command && event.keyCode == 2 { // D — рисование
+        if !command && event.keyCode == 2 && drawingOn { // D — рисование
             withAnimation(.easeOut(duration: 0.2)) { session.toggleDrawing() }
             return true
+        }
+        if !command && event.keyCode == 14 && adjustOn && !session.isDrawing { // E — коррекция
+            withAnimation(.easeOut(duration: 0.22)) { session.toggleAdjusting() }
+            return true
+        }
+        if session.isAdjusting && !command {
+            if event.keyCode == 42 { // \ — до / после
+                if !adjustment.isIdentity { session.showsOriginal.toggle() }
+                return true
+            }
+            if event.keyCode == 53 { // Esc — закрыть коррекцию
+                withAnimation(.easeOut(duration: 0.22)) { session.isAdjusting = false }
+                return true
+            }
         }
         if session.isDrawing && !command {
             let tools: [UInt16: DrawTool] = [35: .pen, 46: .marker, 0: .arrow, 15: .rectangle, 31: .ellipse, 14: .eraser]
@@ -777,16 +895,16 @@ struct ViewerView: View {
             session.toggleViewMode()
             return true
         case 8: // C — сравнение
+            guard compareOn else { return false }
             session.startCompare()
             return true
         case 34: // I — сведения
-            withAnimation(.easeOut(duration: 0.2)) { session.showInfo.toggle() }
+            guard infoOn else { return false }
+            withAnimation(.easeOut(duration: 0.22)) { session.showInfo.toggle() }
             return true
-        case 4: // H — спрятать/показать интерфейс
-            if theme.autoHidesHUD {
-                hideTask?.cancel()
-                withAnimation(.easeOut(duration: 0.2)) { hudVisible.toggle() }
-            }
+        case 4: // H — спрятать/показать интерфейс (в любой теме)
+            hideTask?.cancel()
+            withAnimation(.easeOut(duration: hudVisible ? 0.2 : 0.12)) { hudVisible.toggle() }
             return true
         case 123: // left
             session.goPrevious()
@@ -794,8 +912,8 @@ struct ViewerView: View {
         case 124, 49: // right, space
             session.goNext()
             return true
-        case 51, 117: // delete, forward delete
-            commit(flyTo: CGSize(width: -900, height: 0)) { session.trashCurrent() }
+        case 51, 117: // delete, forward delete — мгновенно: перенос идёт сотни раз за сеанс
+            session.trashCurrent()
             return true
         case 53: // escape
             if isScaled {
@@ -808,9 +926,7 @@ struct ViewerView: View {
             guard let first = event.charactersIgnoringModifiers?.first, first.isWholeNumber else {
                 return false
             }
-            commit(flyTo: CGSize(width: 900, height: 0)) {
-                session.handleShortcut(String(first))
-            }
+            session.handleShortcut(String(first))
             return true
         }
     }

@@ -10,64 +10,70 @@ struct KeyCap: View {
 
     @Environment(\.theme) private var theme
     @Environment(\.keyOnAccent) private var onAccent
+    @Environment(\.keyOnTray) private var onTray
 
     let text: String
     var size: Size = .regular
+    /// Клавиша папки: у «Плёнки» — янтарная цифра, как номер на краю плёнки
+    var target = false
 
-    init(_ text: String, size: Size = .regular) {
+    init(_ text: String, size: Size = .regular, target: Bool = false) {
         self.text = text
         self.size = size
+        self.target = target
     }
 
     private var height: CGFloat {
         switch size {
         case .small: 18
-        case .regular: theme.isGlass ? 22 : 20
-        case .large: 24
+        case .regular: theme.isNeutral ? 20 : 22
+        case .large: theme.isGlass ? 32 : 26
         }
     }
 
     private var radius: CGFloat {
-        switch theme.direction {
-        case .studio: 3
-        case .glass: size == .large ? 7 : 6
-        case .quiet: 0
-        case .contact: 2
-        }
+        theme.isGlass ? height / 2 : 5
+    }
+
+    private var keyBackground: Color {
+        if onAccent { return Color.black.opacity(0.14) }
+        if onTray { return Color.white.opacity(0.18) }
+        return theme.c.keyFill
+    }
+
+    private var foreground: Color {
+        if onAccent { return theme.c.onAccent }
+        if onTray { return .white }
+        if target && theme.isFilm { return theme.c.edge }
+        return theme.c.keyText
     }
 
     var body: some View {
-        let c = theme.c
-        if theme.isQuiet && !onAccent {
-            // «Тишина»: голый символ без плашки
-            Text(text)
-                .font(theme.keyFont)
-                .foregroundStyle(c.text1)
-                .fixedSize()
-        } else {
-            let shape = RoundedRectangle(cornerRadius: radius)
-            Text(text)
-                .font(size == .large ? theme.keyFont.weight(.semibold) : theme.keyFont)
-                .foregroundStyle(onAccent ? c.onAccent : c.keyText)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, 5)
-                .frame(minWidth: height, minHeight: height, maxHeight: height)
-                .background(onAccent ? Color.black.opacity(0.14) : c.keyFill, in: shape)
-                .overlay {
-                    // «Студия»: плоский верх и нижний край темнее — как у настоящей клавиши
-                    if theme.isStudio && !onAccent {
-                        VStack {
-                            Spacer()
-                            Rectangle()
-                                .fill(Color.black.opacity(theme.isLight ? 0.12 : 0.35))
-                                .frame(height: 2)
-                        }
-                        .clipShape(shape)
-                    }
+        let shape = RoundedRectangle(cornerRadius: radius)
+        let raised = !onAccent && !onTray && !theme.isGlass
+        Text(text)
+            .font(size == .large ? .system(size: 13, weight: .semibold) : theme.keyFont)
+            .foregroundStyle(foreground)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, size == .small ? 4 : 6)
+            .frame(minWidth: height, minHeight: height, maxHeight: height)
+            .background(keyBackground, in: shape)
+            .overlay {
+                // Как у настоящей клавиши: светлый блик сверху, у светлой темы — тень снизу
+                if raised {
+                    shape.strokeBorder(
+                        LinearGradient(
+                            colors: theme.isLight
+                                ? [Color.clear, Color.black.opacity(0.12)]
+                                : [Color.white.opacity(0.09), Color.clear],
+                            startPoint: .top, endPoint: .bottom
+                        ),
+                        lineWidth: 1
+                    )
                 }
-                .overlay(shape.stroke(onAccent ? Color.black.opacity(0.2) : c.keyLine, lineWidth: 1))
-        }
+            }
+            .shadow(color: raised && theme.isFilm ? Color.black : Color.clear, radius: 0, y: 1)
     }
 }
 
@@ -76,16 +82,37 @@ struct KeyCap: View {
 struct Hint {
     let keys: [String]
     let label: String
+    /// Куда уходит кадр (папка или корзина): подпись — название папки, крупнее остальных
+    var isTarget = false
 
-    init(_ keys: String..., label: String) {
+    init(_ keys: String..., label: String, target: Bool = false) {
         self.keys = keys
         self.label = label
+        self.isTarget = target
     }
 }
 
 struct HintGroup {
     let title: String
     let hints: [Hint]
+}
+
+extension HintGroup {
+    /// «1 Отобранные · 2 Портфолио · ⌫ Корзина»: клавиши подписаны папками
+    static func targets(_ session: PhotoSession) -> HintGroup {
+        var hints: [Hint] = []
+        if Feature.transfer.isOn {
+            let folders = session.destinations
+            for destination in folders.prefix(4) {
+                hints.append(Hint(destination.shortcut, label: destination.name, target: true))
+            }
+            if folders.count > 4 {
+                hints.append(Hint("5–\(folders.count)", label: "ещё \(folders.count - 4)", target: true))
+            }
+        }
+        hints.append(Hint("⌫", label: "Корзина", target: true))
+        return HintGroup(title: "Отбор", hints: hints)
+    }
 }
 
 /// Подсказки клавиш, сгруппированные по смыслу, в одну строку
@@ -97,33 +124,43 @@ struct HintBar: View {
     var body: some View {
         let c = theme.c
         switch theme.direction {
-        case .studio, .contact:
+        case .film:
             content
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 28)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: theme.hintbarHeight)
-                .background(c.surface1)
-                .overlay(alignment: .top) {
-                    Rectangle().fill(c.line).frame(height: 1)
-                }
+                .clipped()
+        case .neutral:
+            content
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: theme.hintbarHeight)
+                .clipped()
+                .background(Color(hex: 0x222222))
+        case .table:
+            content
+                .padding(.horizontal, 24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: theme.hintbarHeight)
+                .clipped()
+                .background(theme.trayFill)
+                .environment(\.keyOnTray, true)
         case .glass:
             content
-                .padding(.horizontal, 18)
+                .padding(.horizontal, 9)
                 .frame(height: theme.hintbarHeight)
                 .pcGlass(in: .capsule)
                 .padding(.bottom, 16)
-        case .quiet:
-            content
-                .frame(maxWidth: .infinity)
-                .frame(height: theme.hintbarHeight)
+                .foregroundStyle(c.text1)
         }
     }
 
     private var groupSpacing: CGFloat {
         switch theme.direction {
-        case .studio: 20
-        case .glass: 18
-        case .quiet: 18
-        case .contact: 24
+        case .film: 24
+        case .glass: 6
+        case .neutral: 18
+        case .table: 20
         }
     }
 
@@ -133,11 +170,7 @@ struct HintBar: View {
                 if item.offset > 0 {
                     separator
                 }
-                HStack(spacing: theme.isGlass ? 14 : (theme.isQuiet ? 18 : 12)) {
-                    if theme.isStudio || theme.isContact {
-                        Text(item.element.title.uppercased())
-                            .themeLabel(theme)
-                    }
+                HStack(spacing: theme.isGlass ? 6 : groupSpacing) {
                     ForEach(Array(item.element.hints.enumerated()), id: \.offset) { hint in
                         hintView(hint.element)
                     }
@@ -151,25 +184,54 @@ struct HintBar: View {
     @ViewBuilder
     private var separator: some View {
         switch theme.direction {
-        case .studio, .contact:
-            Rectangle().fill(theme.c.line).frame(width: 1, height: 16)
-        case .glass, .quiet:
+        case .film:
+            Rectangle().fill(theme.c.line).frame(width: 1, height: 18)
+        case .glass:
+            Rectangle().fill(Color.white.opacity(0.2)).frame(width: 1, height: 22).padding(.horizontal, 4)
+        case .neutral:
             EmptyView()
+        case .table:
+            Rectangle().fill(Color.white.opacity(0.2)).frame(width: 1, height: 18)
         }
     }
 
+    @ViewBuilder
     private func hintView(_ hint: Hint) -> some View {
-        HStack(spacing: 4) {
-            HStack(spacing: theme.isQuiet ? 3 : 2) {
-                ForEach(hint.keys, id: \.self) { key in
-                    KeyCap(key)
-                }
+        let keys = HStack(spacing: 3) {
+            ForEach(hint.keys, id: \.self) { key in
+                KeyCap(key, target: hint.isTarget)
             }
-            Text(hint.label)
-                .font(.system(size: theme.isQuiet ? 11 : 12))
-                .foregroundStyle(theme.isQuiet ? theme.c.text3 : theme.c.text2)
-                .padding(.leading, 2)
         }
+        if theme.isGlass && hint.isTarget {
+            // Папка — вложенная капсула с клавишей-кружком
+            HStack(spacing: 8) {
+                keys
+                Text(hint.label)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(theme.c.text1)
+            }
+            .padding(.leading, 5)
+            .padding(.trailing, 14)
+            .frame(height: 36)
+            .background(Color.white.opacity(theme.isLight ? 0.5 : 0.1), in: Capsule())
+        } else {
+            HStack(spacing: theme.isNeutral ? 6 : 8) {
+                keys
+                Text(hint.label)
+                    .font(.system(size: labelSize, weight: hint.isTarget ? .medium : .regular))
+                    .foregroundStyle(labelColor(hint))
+            }
+            .padding(.horizontal, theme.isGlass ? 6 : 0)
+        }
+    }
+
+    private var labelSize: CGFloat {
+        theme.isNeutral ? 12 : (theme.isGlass ? 13 : 12.5)
+    }
+
+    private func labelColor(_ hint: Hint) -> Color {
+        if theme.isTable { return hint.isTarget ? .white : Color(hex: 0xB9BBC1) }
+        return hint.isTarget && !theme.isNeutral ? theme.c.text1 : theme.c.text2
     }
 }
 
@@ -201,21 +263,42 @@ private struct PCButtonBody: View {
     @State private var hovered = false
 
     private var height: CGFloat {
-        theme.isGlass ? (big ? 40 : 28) : (big ? 34 : 26)
+        switch theme.direction {
+        case .film: big ? 36 : 30
+        case .glass: big ? 48 : 32
+        case .neutral: big ? 34 : 28
+        case .table: big ? 40 : 32
+        }
     }
 
     var body: some View {
         let pressed = configuration.isPressed
         let shape = RoundedRectangle(cornerRadius: min(theme.rControl, height / 2))
         configuration.label
-            .font(.system(size: big ? (theme.isGlass ? 15 : 14) : 13, weight: kind == .primary ? .semibold : .medium))
+            .font(.system(size: big ? (theme.isGlass ? 16 : 14) : 13, weight: kind == .primary ? .semibold : .medium))
             .lineLimit(1)
             .foregroundStyle(foreground)
-            .padding(.horizontal, big ? (theme.isGlass ? 22 : 18) : (theme.isGlass ? 14 : 12))
+            .padding(.leading, big ? (theme.isGlass ? 24 : 16) : 12)
+            .padding(.trailing, big ? 10 : 12)
             .frame(height: height)
-            .background(background(pressed: pressed), in: shape)
-            .overlay(shape.stroke(border, lineWidth: 1))
-            .brightness(kind == .primary ? (pressed ? -0.1 : (hovered ? 0.05 : 0)) : 0)
+            .background {
+                if theme.isGlass && kind != .ghost && !isOn {
+                    if kind == .primary {
+                        shape.fill(theme.c.accentFill.opacity(0.85))
+                    } else {
+                        Color.clear.pcGlass(in: shape)
+                    }
+                } else {
+                    shape.fill(background(pressed: pressed))
+                }
+            }
+            .overlay {
+                if let borderColor {
+                    shape.strokeBorder(borderColor, lineWidth: 1)
+                }
+            }
+            .shadow(color: shadowColor, radius: kind == .primary && theme.isTable ? 8 : 0.5, y: kind == .primary && theme.isTable ? 5 : 0.5)
+            .brightness(kind == .primary ? (pressed ? -0.08 : (hovered ? 0.04 : 0)) : 0)
             .opacity(isEnabled ? 1 : 0.4)
             .contentShape(shape)
             .environment(\.keyOnAccent, kind == .primary)
@@ -224,7 +307,7 @@ private struct PCButtonBody: View {
 
     private var foreground: Color {
         let c = theme.c
-        if isOn { return c.accent }
+        if isOn { return theme.isTable && theme.isLight ? .white : c.text1 }
         switch kind {
         case .primary: return c.onAccent
         case .secondary: return c.text1
@@ -238,39 +321,37 @@ private struct PCButtonBody: View {
         case .primary:
             return c.accentFill
         case .ghost:
-            return hovered ? c.surface3 : .clear
+            return hovered ? c.surface3.opacity(theme.isLight ? 0.8 : 1) : .clear
         case .secondary:
-            if isOn { return c.selectionFill }
+            if isOn { return theme.isTable && theme.isLight ? c.text1 : c.surface3 }
             switch theme.direction {
+            case .film, .neutral:
+                return pressed ? c.surface1 : (hovered ? c.surface3 : c.surface2)
+            case .table:
+                if !theme.isLight { return pressed ? c.surface1 : (hovered ? c.surface3 : c.surface2) }
+                return pressed ? c.surface3 : (hovered ? c.surface2 : c.surface1)
             case .glass:
-                if theme.isLight {
-                    return Color.black.opacity(pressed ? 0.14 : (hovered ? 0.09 : 0.05))
-                }
-                return Color.white.opacity(pressed ? 0.06 : (hovered ? 0.18 : 0.10))
-            case .quiet:
-                return pressed ? c.surface2 : .clear
-            case .studio, .contact:
-                if pressed { return theme.isLight ? c.surface3 : c.surface1 }
-                return hovered ? c.surface3 : c.surface2
+                return isOn ? Color.white.opacity(0.22) : Color.white.opacity(0.1)
             }
         }
     }
 
-    private var border: Color {
-        let c = theme.c
-        if isOn { return c.accent }
-        switch kind {
-        case .primary: return c.accentFill
-        case .ghost: return .clear
-        case .secondary:
-            if theme.isGlass { return c.line }
-            if theme.isQuiet { return hovered ? c.text1 : c.lineStrong }
-            return c.lineStrong
+    private var borderColor: Color? {
+        if theme.isTable && theme.isLight && kind == .secondary && !isOn {
+            return theme.c.line
         }
+        return nil
+    }
+
+    private var shadowColor: Color {
+        if theme.isTable && theme.isLight {
+            return kind == .primary ? Color.black.opacity(0.3) : (kind == .secondary ? Color.black.opacity(0.08) : .clear)
+        }
+        return .clear
     }
 }
 
-/// Кнопка-значок: панели, строки папок; может быть «включена» (акцент)
+/// Кнопка-значок: панели, строки папок; может быть «включена»
 struct PCIconButtonStyle: ButtonStyle {
     var isOn = false
     var danger = false
@@ -291,18 +372,19 @@ private struct PCIconButtonBody: View {
 
     var body: some View {
         let c = theme.c
-        let side: CGFloat = theme.isGlass ? 30 : 26
+        let side: CGFloat = theme.isGlass ? 34 : (theme.isTable ? 32 : 28)
         let shape = RoundedRectangle(cornerRadius: min(theme.rControl, side / 2))
         let pressed = configuration.isPressed
+        let lightTable = theme.isTable && theme.isLight
         configuration.label
             .font(.system(size: 14))
             .frame(width: side, height: side)
-            .foregroundStyle(isOn ? c.accent : (hovered ? (danger ? c.danger : c.text1) : c.text2))
+            .foregroundStyle(isOn ? (lightTable ? Color.white : c.text1) : (hovered ? (danger ? c.danger : c.text1) : c.text2))
             .background(
-                isOn ? c.selectionFill : (pressed ? c.surface1 : (hovered ? c.surface3 : Color.clear)),
+                isOn ? (lightTable ? c.text1 : (theme.isGlass ? Color.white.opacity(0.22) : c.surface3))
+                    : (pressed ? c.surface1 : (hovered ? c.surface3.opacity(theme.isLight ? 0.8 : 1) : Color.clear)),
                 in: shape
             )
-            .overlay(shape.stroke(isOn ? c.accent : Color.clear, lineWidth: 1))
             .opacity(isEnabled ? 1 : 0.35)
             .contentShape(shape)
             .onHover { hovered = $0 }
@@ -320,21 +402,11 @@ struct PCCheckbox: View {
 
     var body: some View {
         let c = theme.c
-        let shape = RoundedRectangle(cornerRadius: theme.isGlass ? 5 : theme.rSm)
         Button {
             isOn.toggle()
         } label: {
             HStack(spacing: 8) {
-                ZStack {
-                    shape.fill(isOn && !theme.isQuiet ? c.accentFill : Color.clear)
-                    shape.stroke(isOn ? (theme.isQuiet ? c.text1 : c.accentFill) : c.lineStrong, lineWidth: 1)
-                    if isOn {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(theme.isQuiet ? c.text1 : c.onAccent)
-                    }
-                }
-                .frame(width: 16, height: 16)
+                PCCheckMark(isOn: isOn)
                 Text(title)
                     .font(theme.bodyFont)
                     .foregroundStyle(c.text1)
@@ -350,6 +422,65 @@ struct PCCheckbox: View {
     }
 }
 
+/// Квадратик чекбокса: пустой — с обводкой, включённый — залит
+struct PCCheckMark: View {
+    @Environment(\.theme) private var theme
+    let isOn: Bool
+
+    var body: some View {
+        let c = theme.c
+        let shape = RoundedRectangle(cornerRadius: theme.isGlass ? 5 : 4)
+        ZStack {
+            if isOn {
+                shape.fill(c.accentFill)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(c.onAccent)
+            } else {
+                shape.strokeBorder(c.lineStrong, lineWidth: 1.5)
+            }
+        }
+        .frame(width: 16, height: 16)
+    }
+}
+
+// MARK: - Красный карандаш «Плёнки»
+
+/// Обводка от руки вокруг кадра, как карандашом по контрольному листу. Координаты — из макета 200 × 150
+nonisolated struct PencilLoop: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 200, sy = rect.height / 150
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: rect.minX + x * sx, y: rect.minY + y * sy) }
+        var path = Path()
+        path.move(to: p(26, 12))
+        path.addCurve(to: p(178, 10), control1: p(62, 4), control2: p(132, 4))
+        path.addCurve(to: p(196, 56), control1: p(193, 12), control2: p(197, 26))
+        path.addCurve(to: p(187, 136), control1: p(197, 92), control2: p(195, 120))
+        path.addCurve(to: p(148, 146), control1: p(182, 146), control2: p(170, 147))
+        path.addCurve(to: p(28, 144), control1: p(100, 149), control2: p(60, 148))
+        path.addCurve(to: p(6, 108), control1: p(12, 142), control2: p(7, 133))
+        path.addCurve(to: p(10, 26), control1: p(5, 76), control2: p(6, 44))
+        path.addCurve(to: p(44, 7), control1: p(12, 15), control2: p(22, 10))
+        path.addCurve(to: p(112, 6), control1: p(70, 4), control2: p(92, 4))
+        return path
+    }
+}
+
+/// Кружок карандашом вокруг клавиши в подтверждении. Координаты — из макета 34 × 34
+nonisolated struct PencilCircle: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 34, sy = rect.height / 34
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: rect.minX + x * sx, y: rect.minY + y * sy) }
+        var path = Path()
+        path.move(to: p(17, 3))
+        path.addCurve(to: p(31, 18), control1: p(26, 2), control2: p(32, 9))
+        path.addCurve(to: p(14, 31), control1: p(30, 27), control2: p(22, 32))
+        path.addCurve(to: p(3, 14), control1: p(6, 30), control2: p(2, 22))
+        path.addCurve(to: p(19, 4), control1: p(4, 7), control2: p(10, 3))
+        return path
+    }
+}
+
 // MARK: - Подтверждение действия
 
 struct ToastView: View {
@@ -359,27 +490,17 @@ struct ToastView: View {
 
     var body: some View {
         switch theme.direction {
-        case .studio: studio
+        case .film: film
         case .glass: glass
-        case .quiet: quiet
-        case .contact: contact
-        }
-    }
-
-    private var resultColor: Color {
-        let c = theme.c
-        switch toast.kind {
-        case .move: return c.success
-        case .trash, .error: return c.danger
-        case .done: return c.success
-        case .undo, .info: return c.text1
+        case .neutral: neutral
+        case .table: table
         }
     }
 
     private var symbol: String {
         switch toast.kind {
-        case .move: "folder"
-        case .trash: "trash"
+        case .move: "folder.fill"
+        case .trash: "trash.fill"
         case .undo: "arrow.uturn.backward"
         case .done: "checkmark"
         case .error: "exclamationmark"
@@ -387,30 +508,43 @@ struct ToastView: View {
         }
     }
 
-    /// «Студия»: плашка, слева нажатая клавиша, справа результат
-    private var studio: some View {
-        let c = theme.c
-        return HStack(spacing: 10) {
-            if let key = toast.key {
-                KeyCap(key)
+    /// «→» перед названием папки или корзины
+    private var arrow: String? {
+        toast.kind == .move || toast.kind == .trash ? "→" : nil
+    }
+
+    private func line(_ arrowColor: Color, _ textColor: Color) -> some View {
+        HStack(spacing: 8) {
+            if let arrow {
+                Text(arrow).foregroundStyle(arrowColor).fontWeight(.medium)
+            } else if toast.kind == .error {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(theme.c.danger)
             }
-            HStack(spacing: 5) {
-                if toast.kind == .move {
-                    Text("→").foregroundStyle(c.success)
-                } else if toast.kind == .done {
-                    Image(systemName: "checkmark").foregroundStyle(c.success)
-                } else if toast.kind == .error {
-                    Image(systemName: "exclamationmark.triangle").foregroundStyle(c.danger)
-                }
-                Text(toast.text).foregroundStyle(c.text1)
-            }
-            .font(theme.toastFont)
+            Text(toast.text).foregroundStyle(textColor)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .background(c.toastFill, in: RoundedRectangle(cornerRadius: theme.rLg))
-        .overlay(RoundedRectangle(cornerRadius: theme.rLg).stroke(c.line, lineWidth: 1))
-        .shadow(color: .black.opacity(theme.isLight ? 0.2 : 0.55), radius: 12, y: 8)
+        .font(theme.toastFont)
+    }
+
+    /// «Плёнка»: тёмная плашка, клавиша обведена карандашом
+    private var film: some View {
+        let c = theme.c
+        return HStack(spacing: 14) {
+            if let key = toast.key {
+                KeyCap(key, size: .large)
+                    .overlay {
+                        PencilCircle()
+                            .stroke(theme.pen, style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
+                            .frame(width: 42, height: 42)
+                    }
+                    .frame(width: 38, height: 38)
+            }
+            line(c.text3, c.text1)
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 20)
+        .padding(.vertical, 9)
+        .background(c.toastFill, in: RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.55), radius: 16, y: 12)
     }
 
     /// «Стекло»: капсула, круглый значок на цветной заливке и слово
@@ -419,66 +553,63 @@ struct ToastView: View {
         let fill: Color = switch toast.kind {
         case .trash, .error: c.danger
         case .done: c.success
-        case .undo, .info: c.surface3
+        case .undo, .info: Color.white.opacity(0.22)
         case .move: c.accentFill
         }
-        return HStack(spacing: 10) {
+        return HStack(spacing: 14) {
             Image(systemName: symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(toast.kind == .move ? c.onAccent : (toast.kind == .undo || toast.kind == .info ? c.text1 : Color.black))
-                .frame(width: 30, height: 30)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.white)
+                .frame(width: 40, height: 40)
                 .background(fill, in: Circle())
             Text(toast.text)
                 .font(theme.toastFont)
                 .foregroundStyle(c.text1)
         }
-        .padding(.leading, 18)
+        .padding(.leading, 10)
         .padding(.trailing, 26)
-        .padding(.vertical, 14)
+        .frame(height: 58)
         .pcGlass(in: .capsule)
     }
 
-    /// «Тишина»: одно слово поверх фото, без подложки
-    private var quiet: some View {
-        Text(toast.text)
-            .font(theme.toastFont)
-            .foregroundStyle(theme.c.text1)
-            .shadow(color: .black.opacity(0.75), radius: 7, y: 1)
-            .shadow(color: .black.opacity(0.6), radius: 1)
+    /// «Нейтраль»: плотная плашка — клавиша, стрелка, папка
+    private var neutral: some View {
+        let c = theme.c
+        return HStack(spacing: 12) {
+            if let key = toast.key {
+                KeyCap(key, size: .large)
+            }
+            line(c.text3, c.text1)
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 18)
+        .frame(height: 46)
+        .background(c.toastFill, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+        .shadow(color: .black.opacity(0.45), radius: 14, y: 10)
     }
 
-    /// «Контакт»: штамп — рамка цвета результата, моно прописными, поворот −3°
-    private var contact: some View {
-        let c = theme.c
-        let color: Color = switch toast.kind {
-        case .trash, .error: c.danger
-        case .done: c.success
-        default: c.accent
-        }
-        return HStack(spacing: 10) {
+    /// «Световой стол»: белая бирка с тёмными чернилами — и на столе, и в тёмном просмотре
+    private var table: some View {
+        let ink = Color(hex: 0x1A1B1E)
+        return HStack(spacing: 12) {
             if let key = toast.key {
-                Text(key)
-                    .font(theme.keyFont)
-                    .padding(.horizontal, 5)
-                    .frame(minWidth: 20, minHeight: 20)
-                    .overlay(RoundedRectangle(cornerRadius: 2).stroke(color, lineWidth: 1))
+                KeyCap(key, size: .large)
+                    .environment(\.theme, Theme.make(.table, light: true))
             }
-            Text(toast.text.uppercased())
-                .font(theme.toastFont)
-                .tracking(1.7)
+            line(Color(hex: 0x686B72), ink)
         }
-        .foregroundStyle(color)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(c.toastFill, in: RoundedRectangle(cornerRadius: 2))
-        .overlay(RoundedRectangle(cornerRadius: 2).stroke(color, lineWidth: 2))
-        .shadow(color: .black.opacity(0.6), radius: 9, y: 6)
-        .rotationEffect(.degrees(-3))
+        .padding(.leading, 12)
+        .padding(.trailing, 22)
+        .frame(height: 50)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.35), radius: 15, y: 10)
     }
 }
 
-/// Показывает подтверждение из сессии поверх экрана
+/// Показывает подтверждение из сессии внизу экрана, над подсказками. Появляется за 120 мс, гаснет за 200 мс, без сдвига
 struct ToastOverlay: View {
+    @Environment(\.theme) private var theme
     let toast: Toast?
 
     var body: some View {
@@ -486,10 +617,14 @@ struct ToastOverlay: View {
             if let toast {
                 ToastView(toast: toast)
                     .id(toast.id)
-                    .transition(.opacity)
+                    .transition(AnyTransition.asymmetric(
+                        insertion: AnyTransition.opacity.animation(.easeOut(duration: 0.12)),
+                        removal: AnyTransition.opacity.animation(.easeOut(duration: 0.2))
+                    ))
             }
         }
-        .animation(.easeOut(duration: 0.12), value: toast)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .padding(.bottom, theme.hintbarReserve + 28)
         .allowsHitTesting(false)
     }
 }
@@ -516,8 +651,9 @@ struct PCSegmented: View {
 
     var body: some View {
         let c = theme.c
-        let outer = RoundedRectangle(cornerRadius: theme.isGlass ? 14 : theme.rMd + 1)
-        let inner = RoundedRectangle(cornerRadius: theme.isGlass ? 12 : theme.rMd)
+        let outer = RoundedRectangle(cornerRadius: theme.isGlass ? 18 : 9)
+        let inner = RoundedRectangle(cornerRadius: theme.isGlass ? 15 : 6)
+        let lightTable = theme.isTable && theme.isLight
         HStack(spacing: 2) {
             ForEach(items) { item in
                 let isOn = item.id == selected
@@ -526,30 +662,20 @@ struct PCSegmented: View {
                 } label: {
                     HStack(spacing: 5) {
                         Text(item.title)
-                            .font(.system(size: 12, weight: isOn ? .semibold : .medium))
-                            .foregroundStyle(isOn ? c.text1 : c.text2)
+                            .font(.system(size: 12.5, weight: isOn ? .semibold : .medium))
+                            .foregroundStyle(isOn ? (lightTable ? Color.white : c.text1) : c.text2)
                         if item.busy {
                             ProgressView()
                                 .controlSize(.mini)
                         } else if let detail = item.detail {
                             Text(detail)
-                                .font(.system(size: 11).monospacedDigit())
-                                .foregroundStyle(isOn ? c.accent : c.text3)
+                                .font(.system(size: 11.5).monospacedDigit())
+                                .foregroundStyle(isOn ? (lightTable ? Color.white.opacity(0.75) : c.text2) : c.text3)
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .frame(height: 24)
-                    .background(isOn ? c.selectionFill : Color.clear, in: inner)
-                    .overlay {
-                        if isOn && !theme.isQuiet {
-                            inner.strokeBorder(c.selection.opacity(0.6), lineWidth: 1)
-                        }
-                    }
-                    .overlay(alignment: .bottom) {
-                        if isOn && theme.isQuiet {
-                            Rectangle().fill(c.text1).frame(height: 1.5).padding(.horizontal, 8)
-                        }
-                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: theme.isGlass ? 30 : 26)
+                    .background(isOn ? segmentFill : Color.clear, in: inner)
                     .contentShape(inner)
                 }
                 .buttonStyle(.plain)
@@ -557,14 +683,22 @@ struct PCSegmented: View {
                 .help(item.help ?? item.title)
             }
         }
-        .padding(2)
+        .padding(3)
         .background {
-            if !theme.isQuiet && !theme.isGlass {
-                outer.fill(c.surface2)
-                outer.stroke(c.line, lineWidth: 1)
+            if !theme.isGlass {
+                outer.fill(theme.isLight ? c.surface3 : c.surface1)
             }
         }
         .fixedSize()
+    }
+
+    private var segmentFill: Color {
+        let c = theme.c
+        switch theme.direction {
+        case .glass: return Color.white.opacity(theme.isLight ? 0.7 : 0.22)
+        case .table: return theme.isLight ? c.text1 : c.surface3
+        case .film, .neutral: return c.surface3
+        }
     }
 }
 

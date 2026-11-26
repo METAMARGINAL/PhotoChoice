@@ -8,7 +8,7 @@
 
 **PhotoChoice** is a small macOS app for fast photo culling. Pick a folder, browse all shots in a grid, open any of them full screen, and sort each one with a single key or swipe: keep it, send it to one of your folders, or move it to the Trash.
 
-**Current version: 1.4.1** — see [CHANGELOG.md](CHANGELOG.md).
+**Current version: 1.5** — see [CHANGELOG.md](CHANGELOG.md).
 
 ### Download
 
@@ -145,7 +145,7 @@ The People section groups faces with AuraFace-v1 (fal, Apache-2.0, ArcFace-style
 
 **PhotoChoice** — небольшое приложение для macOS, чтобы быстро отбирать фотографии. Выберите папку, просмотрите все кадры сеткой, откройте любой на весь экран и одной клавишей или свайпом решайте его судьбу: оставить, отправить в одну из своих папок или убрать в корзину.
 
-**Текущая версия: 1.4.1** — см. [CHANGELOG.md](CHANGELOG.md).
+**Текущая версия: 1.5** — см. [CHANGELOG.md](CHANGELOG.md).
 
 ### Скачать
 

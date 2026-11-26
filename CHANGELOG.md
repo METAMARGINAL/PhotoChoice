@@ -1,6 +1,6 @@
 # Changelog / История изменений
 
-## Unreleased
+## 1.5 — 2026-11-27
 
 ### English
 - Optional order by capture time (Settings → "Order photos by capture time"): photos from several cameras follow EXIF date and time instead of file names, and are copied (`⌘C`) and dragged in that order.
